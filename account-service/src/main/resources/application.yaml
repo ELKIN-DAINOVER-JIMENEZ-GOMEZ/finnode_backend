@@ -2,7 +2,7 @@ spring:
   application:
     name: account-service
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5532}/${DB_NAME:account_db}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5533}/${DB_NAME:account_db}
     username: ${DB_USER:account_user}
     password: ${DB_PASSWORD:Dainover}
     driver-class-name: org.postgresql.Driver

@@ -1,3 +1,44 @@
+# Configuración base para ledger-service
 spring:
   application:
     name: ledger-service
+
+  # Propiedades de Kafka (se pueden sobrescribir con variables de entorno)
+  kafka:
+    # Dirección(s) del broker Kafka. Por defecto apunta a localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+    # CONFIGURACIÓN DEL CONSUMER
+    consumer:
+      # Grupo por defecto del consumer (se usa en KafkaConsumerConfig)
+      group-id: ${SPRING_KAFKA_CONSUMER_GROUP_ID:ledger-service-group}
+      # Si no hay offset guardado, leer desde el mensaje más antiguo
+      auto-offset-reset: earliest
+      # deshabilitamos el auto-commit: se usa ACK manual en el código
+      enable-auto-commit: false
+      # paquetes confiables para deserialización JSON (si se usa JsonMessageConverter)
+      properties:
+        spring.json.trusted.packages: com.finnode.ledger
+
+    # CONFIGURACIÓN DEL PRODUCER (usado por DeadLetterPublishingRecoverer vía KafkaTemplate)
+    producer:
+      bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+    # Opciones del listener (concurrency controla hilos paralelos por container)
+    listener:
+      concurrency: 3
+
+# Configuración del servidor (puerto HTTP y contexto)
+server:
+  port: ${SERVER_PORT:8084}
+
+# Niveles de logging por paquete
+logging:
+  level:
+    root: INFO
+    com.finnode.ledger: DEBUG
+
+# Variables específicas del proyecto (puedes añadir más según necesites)
+finnode:
+  env: ${FINNODE_ENV:local}
+

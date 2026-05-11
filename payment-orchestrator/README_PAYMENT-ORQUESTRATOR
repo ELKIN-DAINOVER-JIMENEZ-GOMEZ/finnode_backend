@@ -1,0 +1,637 @@
+# 🎼 payment-orchestrator — El Director de Orquesta
+
+> Microservicio de FinNode responsable de coordinar el flujo completo de una transferencia financiera.
+ No ejecuta operaciones directamente; orquesta a los demás microservicios mediante eventos de Kafka
+ siguiendo el Patrón Saga. Es el cerebro del sistema de pagos.
+
+---
+
+## 📋 Tabla de Contenidos
+
+- [Responsabilidades](#-responsabilidades)
+- [Endpoints](#-endpoints)
+- [Estructura de Carpetas](#-estructura-de-carpetas)
+- [Descripción de Cada Capa](#-descripción-de-cada-capa)
+- [Modelo de Base de Datos](#-modelo-de-base-de-datos)
+- [Eventos Kafka](#-eventos-kafka)
+- [El Patrón Saga](#-el-patrón-saga)
+- [Detección de Fraude con Spring AI](#-detección-de-fraude-con-spring-ai)
+- [Dependencias](#-dependencias)
+- [Variables de Entorno](#-variables-de-entorno)
+
+---
+
+## ✅ Responsabilidades
+
+| # | Responsabilidad | Descripción |
+|---|----------------|-------------|
+| 1 | **Recibir solicitud de pago** | Expone el endpoint REST que recibe la intención de transferencia del usuario, validando JWT y datos de entrada |
+| 2 | **Evaluar riesgo de fraude** | Antes de ejecutar cualquier movimiento de fondos, consulta el motor de Spring AI para determinar si la transacción es segura |
+| 3 | **Orquestar el flujo Saga** | Coordina la secuencia: reservar fondos → registrar asientos → confirmar pago. Cada paso es un evento Kafka |
+| 4 | **Gestionar compensaciones** | Si cualquier paso del Saga falla, publica los eventos de compensación necesarios para revertir todo lo ejecutado hasta ese punto |
+| 5 | **Registrar estado de transacción** | Persiste el estado actual de cada transacción (PENDING → COMPLETED / FAILED / REVERSED) para trazabilidad y reintentos |
+| 6 | **Notificar resultado** | Al completarse o fallar un pago, publica el evento final que el frontend consume vía WebSocket para notificar al usuario en tiempo real |
+
+---
+
+## 🌐 Endpoints
+
+```
+POST /payments/transfer             → Iniciar una transferencia entre cuentas
+GET  /payments/{transactionId}      → Consultar el estado de una transacción
+GET  /payments/history              → Historial de pagos del usuario autenticado
+```
+
+> Todos los endpoints requieren JWT válido. El token es validado por el `api-gateway` antes de que la petición llegue a este servicio.
+
+> ⚠️ Este servicio **no expone endpoints de escritura sobre saldos ni asientos**. Toda modificación de datos se delega mediante eventos Kafka a `account-service` y `ledger-service` respectivamente.
+
+---
+
+## 📁 Estructura de Carpetas
+
+```
+payment-orchestrator/
+├── src/
+│   ├── main/
+│   │   ├── java/com/finnode/payment/
+│   │   │   │
+│   │   │   ├── PaymentOrchestratorApplication.java          ← Punto de entrada del microservicio
+│   │   │   │
+│   │   │   ├── config/
+│   │   │   │   ├── SecurityConfig.java                      ← Configura Spring Security como Resource Server JWT
+│   │   │   │   ├── KafkaConsumerConfig.java                 ← Configuración del consumer de Kafka y DLQ
+│   │   │   │   ├── KafkaProducerConfig.java                 ← Configuración del producer de Kafka
+│   │   │   │   ├── FeignConfig.java                         ← Configuración de OpenFeign (interceptor JWT, timeouts)
+│   │   │   │   └── SpringAiConfig.java                      ← Configuración del cliente de Spring AI para fraude
+│   │   │   │
+│   │   │   ├── controller/
+│   │   │   │   └── PaymentController.java                   ← Expone los 3 endpoints REST del servicio
+│   │   │   │
+│   │   │   ├── service/
+│   │   │   │   ├── PaymentService.java                      ← Lógica de negocio: iniciar, monitorear y finalizar transacciones
+│   │   │   │   ├── SagaOrchestrator.java                    ← Gestiona el estado del Saga y decide el siguiente paso o compensación
+│   │   │   │   └── FraudDetectionService.java               ← Evalúa el riesgo de cada transacción usando Spring AI
+│   │   │   │
+│   │   │   ├── client/
+│   │   │   │   └── AccountServiceClient.java                ← Cliente OpenFeign para consultas síncronas a account-service
+│   │   │   │
+│   │   │   ├── repository/
+│   │   │   │   └── TransactionRepository.java               ← Acceso a PostgreSQL: buscar por transactionId, userId, estado
+│   │   │   │
+│   │   │   ├── model/
+│   │   │   │   ├── Transaction.java                         ← Entidad JPA: estado del Saga, montos, cuentas involucradas
+│   │   │   │   ├── TransactionStatus.java                   ← ENUM: PENDING | FRAUD_REJECTED | FUNDS_RESERVED | LEDGER_RECORDED | COMPLETED | FAILED | REVERSED
+│   │   │   │   └── SagaStep.java                            ← ENUM: FRAUD_CHECK | RESERVE_FUNDS | RECORD_LEDGER | CONFIRM_PAYMENT | COMPENSATE
+│   │   │   │
+│   │   │   ├── dto/
+│   │   │   │   ├── TransferRequest.java                     ← Entrada: sourceAccountId, destinationAccountId, amount, currency, description
+│   │   │   │   ├── TransferResponse.java                    ← Salida: transactionId, status, amount, timestamp, message
+│   │   │   │   ├── TransactionStatusResponse.java           ← Salida: transactionId, status, sagaStep, createdAt, updatedAt
+│   │   │   │   └── FraudEvaluationResult.java               ← Resultado interno de Spring AI: approved, riskScore, reason
+│   │   │   │
+│   │   │   ├── event/
+│   │   │   │   ├── PaymentInitiatedEvent.java               ← Publicado a [payment.initiated] al arrancar el Saga
+│   │   │   │   ├── PaymentCompletedEvent.java               ← Publicado a [payment.completed] al finalizar exitosamente
+│   │   │   │   ├── PaymentReversedEvent.java                ← Publicado a [payment.reversed] al revertir el Saga
+│   │   │   │   ├── FundsReservedEvent.java                  ← Consumido desde [account.funds-reserved]
+│   │   │   │   ├── FundsReservationFailedEvent.java         ← Consumido desde [account.funds-reservation-failed]
+│   │   │   │   └── LedgerEntriesRecordedEvent.java          ← Consumido desde [ledger.entries-recorded]
+│   │   │   │
+│   │   │   ├── kafka/
+│   │   │   │   ├── PaymentEventConsumer.java                ← Escucha respuestas de account-service y ledger-service
+│   │   │   │   └── PaymentEventPublisher.java               ← Publica eventos hacia account-service y ledger-service
+│   │   │   │
+│   │   │   └── exception/
+│   │   │       ├── GlobalExceptionHandler.java              ← @RestControllerAdvice: errores uniformes en JSON
+│   │   │       ├── TransactionNotFoundException.java        ← Lanzada si la transacción no existe → HTTP 404
+│   │   │       ├── FraudDetectedException.java              ← Lanzada si el motor de IA rechaza la transacción → HTTP 422
+│   │   │       └── PaymentProcessingException.java          ← Lanzada si el Saga falla irrecuperablemente → HTTP 500
+│   │   │
+│   │   └── resources/
+│   │       └── application.yml                              ← Config: puerto, Kafka, JWT issuer, Spring AI, Feign
+│   │
+│   └── test/
+│       └── java/com/finnode/payment/
+│           ├── service/
+│           │   ├── PaymentServiceTest.java                  ← Unit tests: inicio de transferencia, validaciones
+│           │   ├── SagaOrchestratorTest.java                ← Unit tests: avance del Saga, compensaciones
+│           │   └── FraudDetectionServiceTest.java           ← Unit tests: respuestas del motor de IA
+│           ├── kafka/
+│           │   └── PaymentEventConsumerTest.java            ← Tests del consumer: reacción a eventos de account y ledger
+│           └── controller/
+│               └── PaymentControllerTest.java               ← Integration tests con MockMvc
+│
+├── pom.xml                                                  ← Dependencias Maven del microservicio
+└── Dockerfile                                               ← Imagen Docker del servicio
+```
+
+---
+
+## 📐 Descripción de Cada Capa
+
+### `config/`
+Clases de configuración pura. No contienen lógica de negocio.
+
+| Clase | Qué hace |
+|-------|----------|
+| `SecurityConfig` | Configura este servicio como Resource Server. Valida JWT usando el issuer del `auth-service`. Todas las rutas requieren autenticación |
+| `KafkaConsumerConfig` | Configura el consumer group `payment-orchestrator-group`, deserialización JSON, y la Dead Letter Queue (DLQ) para eventos no procesados correctamente |
+| `KafkaProducerConfig` | Configura el `KafkaTemplate` con serialización JSON para publicar los eventos del Saga hacia `account-service` y `ledger-service` |
+| `FeignConfig` | Configura el cliente HTTP declarativo OpenFeign: interceptor que propaga el JWT en cada llamada saliente, timeouts de conexión y lectura, y política de reintentos |
+| `SpringAiConfig` | Configura el cliente de Spring AI con el modelo seleccionado, temperatura baja (respuestas deterministas) y el system prompt del motor de fraude |
+
+---
+
+### `controller/`
+Capa de entrada HTTP. Solo recibe, valida y delega. No contiene lógica de negocio.
+
+| Clase | Qué hace |
+|-------|----------|
+| `PaymentController` | Expone los 3 endpoints REST. Extrae el `userId` del JWT para asociarlo a la transacción. Valida el request con `@Valid` y delega toda la lógica a `PaymentService` |
+
+---
+
+### `service/`
+Corazón del microservicio. Toda la lógica de negocio reside aquí.
+
+| Clase | Qué hace |
+|-------|----------|
+| `PaymentService` | Orquesta el punto de entrada: recibe el `TransferRequest`, consulta a `FraudDetectionService`, crea la entidad `Transaction` en base de datos, y arranca el Saga publicando el primer evento. También atiende consultas de estado e historial |
+| `SagaOrchestrator` | Gestiona la máquina de estados del Saga. Al recibir cada evento de respuesta (FundsReserved, LedgerRecorded, etc.), decide si avanzar al siguiente paso o iniciar la secuencia de compensación. Actualiza el `TransactionStatus` en cada transición |
+| `FraudDetectionService` | Construye el prompt con los datos de la transacción (monto, cuentas, historial reciente), llama al modelo de Spring AI y parsea el resultado como `FraudEvaluationResult`. Si el riesgo supera el umbral configurado, lanza `FraudDetectedException` antes de mover un solo centavo |
+
+---
+
+### `client/`
+Clientes HTTP declarativos para comunicación síncrona con otros microservicios.
+
+| Clase | Qué hace |
+|-------|----------|
+| `AccountServiceClient` | Interfaz OpenFeign que mapea los endpoints REST de `account-service`. Usada para consultas de validación previas al Saga (ej: verificar que las cuentas existen y están activas). Las operaciones de mutación de saldo se realizan siempre mediante Kafka, no por llamadas síncronas |
+
+---
+
+### `repository/`
+Acceso a datos. Solo habla con PostgreSQL a través de JPA.
+
+| Clase | Qué hace |
+|-------|----------|
+| `TransactionRepository` | Extiende `JpaRepository<Transaction, UUID>`. Métodos: `findByTransactionId()`, `findByUserId()`, `findByStatus()`, `findByUserIdOrderByCreatedAtDesc()` — esta última alimenta el historial de pagos del usuario |
+
+---
+
+### `model/`
+Entidades JPA que se mapean a tablas en PostgreSQL.
+
+| Clase | Campos principales |
+|-------|-------------------|
+| `Transaction` | `id` (UUID), `transactionId` (UUID — identificador público único), `userId` (UUID — quien inicia el pago), `sourceAccountId` (UUID), `destinationAccountId` (UUID), `amount` (BigDecimal), `currency` (VARCHAR), `status` (ENUM `TransactionStatus`), `currentStep` (ENUM `SagaStep`), `fraudRiskScore` (Double — score de IA), `failureReason` (VARCHAR — motivo si falla), `description` (VARCHAR), `createdAt` (TIMESTAMP), `updatedAt` (TIMESTAMP) |
+| `TransactionStatus` | ENUM: `PENDING`, `FRAUD_REJECTED`, `FUNDS_RESERVED`, `LEDGER_RECORDED`, `COMPLETED`, `FAILED`, `REVERSED` |
+| `SagaStep` | ENUM: `FRAUD_CHECK`, `RESERVE_FUNDS`, `RECORD_LEDGER`, `CONFIRM_PAYMENT`, `COMPENSATE` |
+
+---
+
+### `dto/`
+Objetos de transferencia de datos. Separan la API pública de la entidad interna.
+
+| Clase | Dirección | Campos |
+|-------|-----------|--------|
+| `TransferRequest` | Entrada | `sourceAccountId` (@NotNull), `destinationAccountId` (@NotNull), `amount` (@Positive), `currency` (@NotBlank), `description` (opcional) |
+| `TransferResponse` | Salida | `transactionId`, `status`, `amount`, `currency`, `timestamp`, `message` |
+| `TransactionStatusResponse` | Salida | `transactionId`, `status`, `currentStep`, `fraudRiskScore`, `failureReason`, `createdAt`, `updatedAt` |
+| `FraudEvaluationResult` | Interno | `approved` (boolean), `riskScore` (0.0–1.0), `reason` (VARCHAR — explicación del modelo) |
+
+---
+
+### `event/`
+Contratos de los mensajes publicados y consumidos en Kafka.
+
+| Clase | Dirección | Topic | Qué contiene |
+|-------|-----------|-------|--------------|
+| `PaymentInitiatedEvent` | **Publicado** | `payment.initiated` | `transactionId`, `sourceAccountId`, `amount`, `currency`, `timestamp` — arranca el Saga |
+| `PaymentCompletedEvent` | **Publicado** | `payment.completed` | `transactionId`, `sourceAccountId`, `destinationAccountId`, `amount`, `currency`, `timestamp` — dispara registro contable en `ledger-service` |
+| `PaymentReversedEvent` | **Publicado** | `payment.reversed` | `transactionId`, `sourceAccountId`, `destinationAccountId`, `amount`, `currency`, `reversalReason`, `timestamp` — dispara asientos de compensación en `ledger-service` |
+| `FundsReservedEvent` | **Consumido** | `account.funds-reserved` | `transactionId`, `accountId`, `amount`, `timestamp` — señal verde para avanzar al paso contable |
+| `FundsReservationFailedEvent` | **Consumido** | `account.funds-reservation-failed` | `transactionId`, `accountId`, `reason`, `timestamp` — dispara compensación Saga |
+| `LedgerEntriesRecordedEvent` | **Consumido** | `ledger.entries-recorded` | `transactionId`, `debitEntryId`, `creditEntryId`, `amount`, `timestamp` — señal verde para completar el pago |
+
+---
+
+### `kafka/`
+Capa de mensajería. Desacopla la lógica de negocio del transporte de eventos.
+
+| Clase | Qué hace |
+|-------|----------|
+| `PaymentEventConsumer` | `@KafkaListener` sobre los topics `[account.funds-reserved]`, `[account.funds-reservation-failed]` y `[ledger.entries-recorded]`. Al recibir cada evento, llama a `SagaOrchestrator` para avanzar o revertir el flujo según el resultado |
+| `PaymentEventPublisher` | Encapsula el `KafkaTemplate`. Métodos: `publishPaymentInitiated()`, `publishPaymentCompleted()`, `publishPaymentReversed()`. Cada publicación actualiza también el `SagaStep` en la base de datos |
+
+---
+
+### `exception/`
+Manejo centralizado de errores para respuestas HTTP consistentes.
+
+| Clase | Qué hace |
+|-------|----------|
+| `GlobalExceptionHandler` | `@RestControllerAdvice` que captura excepciones y las convierte en respuestas JSON estandarizadas con código HTTP apropiado |
+| `TransactionNotFoundException` | → HTTP 404 Not Found |
+| `FraudDetectedException` | → HTTP 422 Unprocessable Entity (incluye el `riskScore` en la respuesta para transparencia) |
+| `PaymentProcessingException` | → HTTP 500 Internal Server Error (fallo irrecuperable del Saga; los fondos ya fueron revertidos) |
+
+---
+
+## 🗄️ Modelo de Base de Datos
+
+**Tabla: `transactions`**
+
+```
+┌───────────────────────┬─────────────────┬──────────────────────────────────────────────────────┐
+│ Columna               │ Tipo            │ Descripción                                           │
+├───────────────────────┼─────────────────┼──────────────────────────────────────────────────────┤
+│ id                    │ UUID (PK)       │ Identificador interno de la entidad                   │
+│ transaction_id        │ UUID (UNIQUE)   │ Identificador público de la transacción (compartido con otros servicios) │
+│ user_id               │ UUID (INDEX)    │ Referencia lógica al usuario que inicia el pago       │
+│ source_account_id     │ UUID            │ Cuenta de origen del débito                           │
+│ destination_account_id│ UUID            │ Cuenta de destino del crédito                         │
+│ amount                │ DECIMAL(19,4)   │ Monto de la transferencia                             │
+│ currency              │ VARCHAR(3)      │ Código de moneda ISO 4217 (COP, USD, EUR)             │
+│ status                │ VARCHAR(20)     │ ENUM: PENDING → COMPLETED / FAILED / REVERSED         │
+│ current_step          │ VARCHAR(30)     │ ENUM: paso actual del Saga para diagnóstico           │
+│ fraud_risk_score      │ DOUBLE          │ Score de riesgo devuelto por el motor de IA (0.0–1.0) │
+│ failure_reason        │ VARCHAR(500)    │ Motivo del fallo si el Saga no se completó            │
+│ description           │ VARCHAR(255)    │ Descripción opcional ingresada por el usuario         │
+│ created_at            │ TIMESTAMP       │ Inicio de la transacción                              │
+│ updated_at            │ TIMESTAMP       │ Última transición de estado (actualizado automáticamente) │
+└───────────────────────┴─────────────────┴──────────────────────────────────────────────────────┘
+```
+
+> ⚠️ `payment-orchestrator` tiene su **propia instancia de PostgreSQL** aislada. Su base de datos es el registro de estados del Saga, no el libro contable (eso es responsabilidad de `ledger-service`) ni el saldo real (responsabilidad de `account-service`).
+
+**Índices recomendados:**
+```sql
+CREATE UNIQUE INDEX idx_transactions_transaction_id ON transactions(transaction_id);
+CREATE INDEX idx_transactions_user_id ON transactions(user_id);
+CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_transactions_user_created ON transactions(user_id, created_at DESC);
+```
+
+---
+
+## 📨 Eventos Kafka
+
+### Eventos Publicados
+
+**Topic:** `payment.initiated`
+```json
+{
+  "transactionId": "txn-9f1e2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "sourceAccountId": "acc-1a2b3c4d-...",
+  "amount": 500000.00,
+  "currency": "COP",
+  "timestamp": "2025-01-15T10:31:00Z"
+}
+```
+**Consumidor:** `account-service` — al recibir este evento, inicia la reserva de fondos.
+
+---
+
+**Topic:** `payment.completed`
+```json
+{
+  "transactionId": "txn-9f1e2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "sourceAccountId": "acc-1a2b3c4d-...",
+  "destinationAccountId": "acc-5e6f7a8b-...",
+  "amount": 500000.00,
+  "currency": "COP",
+  "timestamp": "2025-01-15T10:31:10Z"
+}
+```
+**Consumidor:** `ledger-service` — al recibir este evento, registra el par de asientos DEBIT/CREDIT.
+
+---
+
+**Topic:** `payment.reversed`
+```json
+{
+  "transactionId": "txn-9f1e2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "sourceAccountId": "acc-1a2b3c4d-...",
+  "destinationAccountId": "acc-5e6f7a8b-...",
+  "amount": 500000.00,
+  "currency": "COP",
+  "reversalReason": "LEDGER_RECORDING_TIMEOUT",
+  "timestamp": "2025-01-15T10:31:45Z"
+}
+```
+**Consumidores:** `account-service` (libera la reserva) y `ledger-service` (registra asientos de compensación).
+
+---
+
+### Eventos Consumidos
+
+**Topic:** `account.funds-reserved` → avanza el Saga al paso `RECORD_LEDGER`
+
+**Topic:** `account.funds-reservation-failed` → inicia compensación; marca transacción como `FAILED`
+
+**Topic:** `ledger.entries-recorded` → completa el Saga; marca transacción como `COMPLETED`
+
+---
+
+## 🔄 El Patrón Saga
+
+El `payment-orchestrator` implementa el **Patrón Saga de Orquestación**: es el único componente que conoce el flujo completo. Los demás servicios solo reaccionan a eventos, sin saber que participan en un flujo mayor.
+
+### Flujo Exitoso
+
+```
+Usuario → POST /payments/transfer
+              │
+              ▼
+    FraudDetectionService (Spring AI)
+              │ aprobado
+              ▼
+    Transaction creada (status: PENDING)
+              │
+              ▼
+    Kafka → [payment.initiated]
+              │
+              ▼
+    account-service reserva fondos
+              │
+    Kafka ← [account.funds-reserved]
+              │
+              ▼
+    Transaction (status: FUNDS_RESERVED)
+              │
+    Kafka → [payment.completed]
+              │
+              ▼
+    ledger-service registra asientos
+              │
+    Kafka ← [ledger.entries-recorded]
+              │
+              ▼
+    Transaction (status: COMPLETED) ✅
+              │
+    Kafka → [payment.status-updated]   ← Frontend recibe notificación vía WebSocket
+```
+
+### Flujo de Compensación (Saga Revertido)
+
+```
+    Kafka ← [account.funds-reservation-failed]
+              │  (saldo insuficiente o cuenta suspendida)
+              ▼
+    Transaction (status: FAILED)
+              │
+    SagaOrchestrator decide: no hay fondos reservados → no hay nada que compensar
+              │
+    Kafka → [payment.status-updated]   ← Frontend notifica al usuario ❌
+
+    ─────────────────────────────────────────────────────
+
+    Kafka ← [ledger timeout / error]
+              │  (los fondos ya fueron reservados)
+              ▼
+    SagaOrchestrator decide: compensar account-service
+              │
+    Kafka → [payment.reversed]
+              │
+              ▼
+    account-service libera la reserva
+    ledger-service registra asientos de compensación
+              │
+    Transaction (status: REVERSED) ↩️
+              │
+    Kafka → [payment.status-updated]   ← Frontend notifica al usuario
+```
+
+### Matriz de Transiciones del Saga
+
+| Estado Actual | Evento Recibido | Siguiente Estado | Acción |
+|---------------|-----------------|------------------|--------|
+| `PENDING` | `FundsReservedEvent` | `FUNDS_RESERVED` | Publicar `payment.completed` a ledger |
+| `PENDING` | `FundsReservationFailedEvent` | `FAILED` | Notificar al usuario, no hay compensación |
+| `FUNDS_RESERVED` | `LedgerEntriesRecordedEvent` | `COMPLETED` | Notificar al usuario ✅ |
+| `FUNDS_RESERVED` | Timeout de ledger | `REVERSED` | Publicar `payment.reversed` para compensar |
+| `FRAUD_CHECK` | IA rechaza | `FRAUD_REJECTED` | Retornar HTTP 422, no iniciar Saga |
+
+---
+
+## 🛡️ Detección de Fraude con Spring AI
+
+Antes de reservar un solo centavo, `FraudDetectionService` consulta un modelo de lenguaje a través de **Spring AI** para evaluar el riesgo de la transacción.
+
+### ¿Qué evalúa el modelo?
+
+El prompt construido por el servicio incluye el contexto de la transacción:
+
+```
+- Monto de la transferencia y moneda
+- Historial reciente de transacciones del usuario (últimas 10)
+- Hora del día y día de la semana
+- Si es la primera vez que se transfiere a esta cuenta destino
+- Frecuencia de pagos al mismo destinatario en las últimas 24h
+```
+
+### Respuesta esperada del modelo
+
+El modelo responde en JSON estructurado:
+
+```json
+{
+  "approved": false,
+  "riskScore": 0.87,
+  "reason": "Transacción de alto valor a cuenta nueva fuera del horario habitual del usuario"
+}
+```
+
+### Umbral de riesgo
+
+Configurable en `application.yml`. Por defecto, cualquier transacción con `riskScore >= 0.75` es rechazada antes de iniciar el Saga.
+
+```yaml
+fraud:
+  risk-threshold: 0.75    # Umbral configurable sin redespliegue
+```
+
+> ⚠️ El `fraudRiskScore` se almacena siempre en la tabla `transactions`, incluso para pagos aprobados, para alimentar el historial de análisis y mejorar el modelo con el tiempo.
+
+---
+
+## 📦 Dependencias
+
+**`pom.xml` — Spring Initializr:**
+
+| Dependencia | Uso |
+|-------------|-----|
+| `spring-boot-starter-web` | Servidor HTTP y endpoints REST |
+| `spring-boot-starter-security` | Seguridad base y filtros HTTP |
+| `spring-boot-starter-oauth2-resource-server` | Validación de JWT como Resource Server |
+| `spring-boot-starter-validation` | Validaciones `@Valid`, `@NotNull`, `@Positive` |
+| `spring-kafka` | Publicar y consumir eventos en Kafka |
+| `spring-cloud-starter-openfeign` | Clientes HTTP declarativos para llamadas síncronas a `account-service` |
+| `spring-ai-openai-spring-boot-starter` | Motor de detección de fraude con LLM |
+| `spring-boot-starter-data-jpa` | ORM con Hibernate para persistencia del estado del Saga |
+| `postgresql` | Driver JDBC de PostgreSQL |
+| `lombok` | Reducir boilerplate (getters, constructores, builders) |
+
+> ⚠️ Este servicio **sí incluye** `spring-boot-starter-data-jpa` y `postgresql` para persistir el estado de las transacciones, aunque no gestiona saldos ni asientos contables.
+
+---
+
+## ⚙️ Variables de Entorno
+
+Definidas en `application.yml` e inyectables como variables de entorno en Docker:
+
+```yaml
+server:
+  port: 8083
+
+spring:
+  datasource:
+    url: jdbc:postgresql://payment-db:5432/payment_db
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKER}
+    consumer:
+      group-id: payment-orchestrator-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.finnode.*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.1      # Baja temperatura para respuestas deterministas
+
+fraud:
+  risk-threshold: ${FRAUD_RISK_THRESHOLD:0.75}   # Valor por defecto: 0.75
+
+feign:
+  client:
+    config:
+      account-service:
+        connectTimeout: 3000
+        readTimeout: 5000
+```
+
+| Variable | Descripción | Ejemplo |
+|----------|-------------|---------|
+| `DB_USER` | Usuario de PostgreSQL | `payment_user` |
+| `DB_PASSWORD` | Contraseña de PostgreSQL | `s3cr3t` |
+| `KAFKA_BROKER` | Host y puerto de Kafka | `kafka:9092` |
+| `JWT_ISSUER_URI` | URI del emisor JWT para validación | `http://auth-service:8081` |
+| `OPENAI_API_KEY` | API key de OpenAI para Spring AI | `sk-...` |
+| `FRAUD_RISK_THRESHOLD` | Umbral de riesgo (0.0–1.0) | `0.75` |
+
+---
+
+## 🔄 Flujos Internos
+
+### Inicio de Transferencia
+
+```
+POST /payments/transfer
+        │
+        ▼
+PaymentController.transfer()
+        │  @Valid TransferRequest + userId del JWT
+        ▼
+PaymentService.initiateTransfer()
+        ├── Valida que sourceAccountId ≠ destinationAccountId
+        ├── Consulta account-service via Feign: verifica que ambas cuentas existen y están ACTIVE
+        ├── Llama a FraudDetectionService.evaluate()
+        │       ├── Construye prompt con contexto de la transacción
+        │       ├── Llama al modelo Spring AI
+        │       └── Parsea FraudEvaluationResult
+        │           └── Si riskScore >= threshold → FraudDetectedException (HTTP 422)
+        ├── Persiste Transaction (status: PENDING, step: RESERVE_FUNDS)
+        ├── Llama a SagaOrchestrator.start()
+        │       └── PaymentEventPublisher.publishPaymentInitiated()
+        │               → Kafka [payment.initiated]
+        └── Retorna TransferResponse con transactionId y status PENDING
+```
+
+### Avance del Saga: Fondos Reservados
+
+```
+Kafka [account.funds-reserved]
+        │
+        ▼
+PaymentEventConsumer.onFundsReserved()
+        │
+        ▼
+SagaOrchestrator.onFundsReserved()
+        ├── Actualiza Transaction: status → FUNDS_RESERVED, step → RECORD_LEDGER
+        └── PaymentEventPublisher.publishPaymentCompleted()
+                → Kafka [payment.completed]   ← ledger-service crea los asientos
+```
+
+### Avance del Saga: Asientos Registrados
+
+```
+Kafka [ledger.entries-recorded]
+        │
+        ▼
+PaymentEventConsumer.onLedgerRecorded()
+        │
+        ▼
+SagaOrchestrator.onLedgerRecorded()
+        ├── Actualiza Transaction: status → COMPLETED, step → CONFIRM_PAYMENT
+        └── Publica evento WebSocket → Frontend notifica al usuario ✅
+```
+
+### Compensación del Saga: Fondos no Reservados
+
+```
+Kafka [account.funds-reservation-failed]
+        │
+        ▼
+PaymentEventConsumer.onFundsReservationFailed()
+        │
+        ▼
+SagaOrchestrator.compensate()
+        ├── Actualiza Transaction: status → FAILED, step → COMPENSATE, failureReason = reason
+        └── Publica evento WebSocket → Frontend notifica al usuario ❌
+        (no se publica payment.reversed porque nunca hubo fondos reservados)
+```
+
+### Compensación del Saga: Timeout de Ledger
+
+```
+Timeout en espera de [ledger.entries-recorded]
+        │
+        ▼
+SagaOrchestrator.onTimeout()
+        ├── Actualiza Transaction: status → REVERSED, step → COMPENSATE
+        │   failureReason = "LEDGER_RECORDING_TIMEOUT"
+        └── PaymentEventPublisher.publishPaymentReversed()
+                → Kafka [payment.reversed]
+                    ├── account-service libera la reserva de fondos
+                    └── ledger-service registra asientos de compensación
+```
+
+---
+
+*`payment-orchestrator` — Porque coordinar el movimiento de dinero requiere un director que conozca la partitura completa.*

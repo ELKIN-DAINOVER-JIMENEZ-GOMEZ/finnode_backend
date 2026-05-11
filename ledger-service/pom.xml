@@ -55,6 +55,14 @@
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
 
+						<!-- Jackson: necesario para org.springframework.kafka.support.serializer.JsonDeserializer
+							 Se agrega explícitamente para asegurar que las clases de com.fasterxml.jackson estén
+							 presentes en tiempo de compilación (ObjectMapper, JavaType, TypeReference, ...). -->
+						<dependency>
+							<groupId>com.fasterxml.jackson.core</groupId>
+							<artifactId>jackson-databind</artifactId>
+						</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-devtools</artifactId>

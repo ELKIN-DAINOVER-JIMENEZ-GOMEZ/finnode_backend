@@ -1,0 +1,61 @@
+services:
+  account-db:
+    image: postgres:16-alpine
+    container_name: account-db
+    environment:
+      POSTGRES_DB: account_db
+      POSTGRES_USER: account_user
+      POSTGRES_PASSWORD: Dainover
+    ports:
+      - "5532:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U account_user -d account_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - account-db-data:/var/lib/postgresql/data
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: kafka
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+
+  account-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: account-service
+    depends_on:
+      account-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      DB_HOST: account-db
+      DB_PORT: 5432
+      DB_NAME: account_db
+      DB_USER: account_user
+      DB_PASSWORD: Dainover
+      KAFKA_BROKER: kafka:9092
+      JWT_ISSUER_URI: ${JWT_ISSUER_URI:-http://host.docker.internal:8081}
+      SERVER_PORT: 8082
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8082:8082"
+
+volumes:
+  account-db-data:
+

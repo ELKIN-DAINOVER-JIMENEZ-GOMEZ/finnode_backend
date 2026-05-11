@@ -15,6 +15,7 @@
 - [Control de Concurrencia](#-control-de-concurrencia)
 - [Dependencias](#-dependencias)
 - [Variables de Entorno](#-variables-de-entorno)
+- [Docker Compose Local](#-docker-compose-local)
 
 ---
 
@@ -381,6 +382,40 @@ spring:
 | `DB_PASSWORD` | Contraseña de PostgreSQL | `s3cr3t` |
 | `KAFKA_BROKER` | Host y puerto de Kafka | `kafka:9092` |
 | `JWT_ISSUER_URI` | URI del emisor JWT para validación | `http://auth-service:8081` |
+
+---
+
+## 🐳 Docker Compose Local
+
+Archivo: `account-service/docker-compose.yml`
+
+Levanta `account-service`, `account-db` (PostgreSQL) y `kafka` (single-node KRaft).
+
+```sh
+cd /home/Dainover/Documentos/finnode/account-service
+docker compose up -d --build
+```
+
+Ver logs del servicio:
+
+```sh
+cd /home/Dainover/Documentos/finnode/account-service
+docker compose logs -f account-service
+```
+
+Detener y limpiar contenedores:
+
+```sh
+cd /home/Dainover/Documentos/finnode/account-service
+docker compose down
+```
+
+Si el `auth-service` corre fuera de Docker, puedes ajustar el issuer antes de levantar:
+
+```sh
+cd /home/Dainover/Documentos/finnode/account-service
+JWT_ISSUER_URI=http://host.docker.internal:8081 docker compose up -d --build
+```
 
 ---
 

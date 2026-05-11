@@ -1,0 +1,520 @@
+# 📒 ledger-service — El Contador Inmutable
+
+> Microservicio de FinNode responsable de la Contabilidad de Partida Doble. Registra
+cada movimiento financiero como asientos contables inmutables. Es la fuente de verdad histórica del sistema.
+
+---
+
+## 📋 Tabla de Contenidos
+
+- [Responsabilidades](#-responsabilidades)
+- [Endpoints](#-endpoints)
+- [Estructura de Carpetas](#-estructura-de-carpetas)
+- [Descripción de Cada Capa](#-descripción-de-cada-capa)
+- [Modelo de Base de Datos](#-modelo-de-base-de-datos)
+- [Eventos Kafka](#-eventos-kafka)
+- [Contabilidad de Partida Doble](#-contabilidad-de-partida-doble)
+- [Event Sourcing](#-event-sourcing)
+- [Dependencias](#-dependencias)
+- [Variables de Entorno](#-variables-de-entorno)
+- [Docker Compose Local](#-docker-compose-local)
+
+---
+
+## ✅ Responsabilidades
+
+| # | Responsabilidad | Descripción |
+|---|----------------|-------------|
+| 1 | **Registrar asiento de débito** | Al recibir confirmación de un pago, crea el asiento contable que reduce el balance de la cuenta origen |
+| 2 | **Registrar asiento de crédito** | Simultáneamente, crea el asiento contable que incrementa el balance de la cuenta destino |
+| 3 | **Garantizar balance contable** | Valida que la suma de débitos siempre sea igual a la suma de créditos por transacción. Si no cuadran, rechaza el registro |
+| 4 | **Proveer historial auditado** | Expone el historial completo e inmutable de movimientos de una cuenta para auditoría y consulta |
+| 5 | **Calcular saldo por Event Sourcing** | El saldo de una cuenta puede recalcularse en cualquier punto del tiempo sumando todos sus asientos históricos |
+| 6 | **Registrar asiento de reversión** | Si el Patrón Saga revierte una transacción, crea asientos de compensación que anulan los originales |
+
+---
+
+## 🌐 Endpoints
+
+```
+GET  /ledger/{accountId}/entries              → Historial completo de asientos de una cuenta
+GET  /ledger/{accountId}/entries?from=&to=    → Historial filtrado por rango de fechas
+GET  /ledger/{accountId}/balance              → Saldo calculado por Event Sourcing
+GET  /ledger/transactions/{transactionId}     → Todos los asientos de una transacción específica
+```
+
+> ⚠️ Este servicio **no expone endpoints de escritura REST**. Los asientos contables se crean exclusivamente al consumir eventos de Kafka publicados por el `payment-orchestrator`. Esto garantiza que ningún agente externo pueda manipular el libro contable directamente.
+
+> Todos los endpoints de lectura requieren JWT válido. El token es validado por el `api-gateway` antes de que la petición llegue a este servicio.
+
+---
+
+## 📁 Estructura de Carpetas
+
+```
+ledger-service/
+├── src/
+│   ├── main/
+│   │   ├── java/com/finnode/ledger/
+│   │   │   │
+│   │   │   ├── LedgerServiceApplication.java                ← Punto de entrada del microservicio
+│   │   │   │
+│   │   │   ├── config/
+│   │   │   │   ├── SecurityConfig.java                      ← Configura Spring Security como Resource Server JWT
+│   │   │   │   └── KafkaConsumerConfig.java                 ← Configuración del consumer de Kafka y DLQ
+│   │   │   │
+│   │   │   ├── controller/
+│   │   │   │   └── LedgerController.java                    ← Expone los 4 endpoints REST de consulta (solo lectura)
+│   │   │   │
+│   │   │   ├── service/
+│   │   │   │   ├── LedgerService.java                       ← Lógica de negocio: registrar asientos, validar balance
+│   │   │   │   └── BalanceCalculatorService.java            ← Calcula el saldo actual sumando asientos históricos
+│   │   │   │
+│   │   │   ├── repository/
+│   │   │   │   └── LedgerEntryRepository.java               ← Acceso a PostgreSQL: consultas por cuenta, fecha, transacción
+│   │   │   │
+│   │   │   ├── model/
+│   │   │   │   ├── LedgerEntry.java                         ← Entidad JPA principal: asiento contable inmutable
+│   │   │   │   └── EntryType.java                           ← ENUM: DEBIT | CREDIT | REVERSAL_DEBIT | REVERSAL_CREDIT
+│   │   │   │
+│   │   │   ├── dto/
+│   │   │   │   ├── LedgerEntryResponse.java                 ← Salida: entryId, accountId, type, amount, transactionId, createdAt
+│   │   │   │   ├── LedgerHistoryResponse.java               ← Salida: lista de entries + totalDebits + totalCredits + balance
+│   │   │   │   └── BalanceResponse.java                     ← Salida: accountId, computedBalance, entryCount, asOf
+│   │   │   │
+│   │   │   ├── event/
+│   │   │   │   ├── PaymentCompletedEvent.java               ← Consumido desde [payment.completed]: dispara registro de asientos
+│   │   │   │   └── PaymentReversedEvent.java                ← Consumido desde [payment.reversed]: dispara asientos de compensación
+│   │   │   │
+│   │   │   ├── kafka/
+│   │   │   │   ├── LedgerEventConsumer.java                 ← Escucha [payment.completed] y [payment.reversed]
+│   │   │   │   └── LedgerEventPublisher.java                ← Publica [ledger.entries-recorded] al confirmar el registro
+│   │   │   │
+│   │   │   └── exception/
+│   │   │       ├── GlobalExceptionHandler.java              ← @RestControllerAdvice: errores uniformes en JSON
+│   │   │       ├── LedgerEntryNotFoundException.java        ← Lanzada si no hay asientos para la cuenta → HTTP 404
+│   │   │       └── LedgerImbalanceException.java            ← Lanzada si débitos ≠ créditos en la transacción → HTTP 422
+│   │   │
+│   │   └── resources/
+│   │       └── application.yml                              ← Config: puerto, DB, Kafka, JWT issuer
+│   │
+│   └── test/
+│       └── java/com/finnode/ledger/
+│           ├── service/
+│           │   ├── LedgerServiceTest.java                   ← Unit tests: registro de asientos, validación de balance
+│           │   └── BalanceCalculatorServiceTest.java        ← Unit tests: cálculo de saldo por Event Sourcing
+│           ├── kafka/
+│           │   └── LedgerEventConsumerTest.java             ← Tests del consumer: registro al recibir evento de pago
+│           └── controller/
+│               └── LedgerControllerTest.java                ← Integration tests con MockMvc
+│
+├── pom.xml                                                  ← Dependencias Maven del microservicio
+└── Dockerfile                                               ← Imagen Docker del servicio
+```
+
+---
+
+## 📐 Descripción de Cada Capa
+
+### `config/`
+Clases de configuración pura. No contienen lógica de negocio.
+
+| Clase | Qué hace |
+|-------|----------|
+| `SecurityConfig` | Configura este servicio como Resource Server. Valida JWT usando el issuer del `auth-service`. Todos los endpoints de lectura requieren autenticación. Los endpoints de escritura no existen en HTTP — solo Kafka puede escribir |
+| `KafkaConsumerConfig` | Configura el consumer group `ledger-service-group`, deserialización JSON, y la Dead Letter Queue (DLQ) para mensajes que fallen 3 veces consecutivas, garantizando que ningún asiento se pierda silenciosamente |
+
+---
+
+### `controller/`
+Capa de entrada HTTP. Solo lectura. No contiene lógica de negocio.
+
+| Clase | Qué hace |
+|-------|----------|
+| `LedgerController` | Expone los 4 endpoints REST de consulta. Valida que el `userId` extraído del JWT corresponda a la cuenta solicitada (un usuario no puede ver el historial contable de otro). Delega toda la lógica a `LedgerService` |
+
+---
+
+### `service/`
+Corazón del microservicio. Toda la lógica de negocio reside aquí.
+
+| Clase | Qué hace |
+|-------|----------|
+| `LedgerService` | Orquesta el registro de asientos al recibir eventos Kafka. Para cada `PaymentCompletedEvent` crea dos `LedgerEntry` atómicamente (un DEBIT y un CREDIT). Valida que los montos cuadren antes de persistir. Para reversiones, crea asientos `REVERSAL_DEBIT` y `REVERSAL_CREDIT` que contrarrestan los originales |
+| `BalanceCalculatorService` | Consulta todos los asientos históricos de una cuenta y calcula el saldo actual como la suma algebraica: `Σ CREDIT - Σ DEBIT`. Permite recalcular el saldo en cualquier punto del tiempo pasando una fecha como parámetro (`asOf`) |
+
+---
+
+### `repository/`
+Acceso a datos. Solo habla con PostgreSQL a través de JPA.
+
+| Clase | Qué hace |
+|-------|----------|
+| `LedgerEntryRepository` | Extiende `JpaRepository<LedgerEntry, UUID>`. Métodos: `findByAccountId()`, `findByAccountIdAndCreatedAtBetween()`, `findByTransactionId()`, `sumAmountByAccountIdAndEntryType()` — esta última es la consulta clave del Event Sourcing |
+
+---
+
+### `model/`
+Entidades JPA que se mapean a tablas en PostgreSQL. **Estas entidades son inmutables por diseño.**
+
+| Clase | Campos principales |
+|-------|--------------------|
+| `LedgerEntry` | `id` (UUID), `transactionId` (UUID — referencia a la transacción del `payment-orchestrator`), `accountId` (UUID), `counterpartAccountId` (UUID — la otra cuenta involucrada), `entryType` (ENUM), `amount` (BigDecimal — siempre positivo), `currency` (VARCHAR — ej: COP, USD), `description` (VARCHAR), `createdAt` (TIMESTAMP — inmutable, nunca se actualiza) |
+| `EntryType` | ENUM con valores: `DEBIT` (salida de fondos), `CREDIT` (entrada de fondos), `REVERSAL_DEBIT` (reversión de un crédito previo), `REVERSAL_CREDIT` (reversión de un débito previo) |
+
+> ⚠️ La entidad `LedgerEntry` **no tiene campo `updatedAt`** ni **`@Version`**. Una vez creado, un asiento contable nunca se modifica. Si hay un error, se crea un asiento de compensación nuevo. Este principio es la base del Event Sourcing financiero.
+
+---
+
+### `dto/`
+Objetos de transferencia de datos. Separan la API pública de la entidad interna.
+
+| Clase | Dirección | Campos |
+|-------|-----------|--------|
+| `LedgerEntryResponse` | Salida | `entryId`, `transactionId`, `accountId`, `counterpartAccountId`, `entryType`, `amount`, `currency`, `description`, `createdAt` |
+| `LedgerHistoryResponse` | Salida | `accountId`, `entries` (lista de `LedgerEntryResponse`), `totalDebits`, `totalCredits`, `netBalance`, `periodFrom`, `periodTo` |
+| `BalanceResponse` | Salida | `accountId`, `computedBalance`, `totalEntries`, `asOf` (timestamp del cálculo) |
+
+---
+
+### `event/`
+Contratos de los mensajes consumidos desde Kafka. Este servicio **solo consume**, salvo el evento de confirmación de registro.
+
+| Clase | Dirección | Qué contiene |
+|-------|-----------|--------------|
+| `PaymentCompletedEvent` | **Consumido** de `[payment.completed]` | `transactionId`, `sourceAccountId`, `destinationAccountId`, `amount`, `currency`, `timestamp` — dispara la creación del par de asientos DEBIT/CREDIT |
+| `PaymentReversedEvent` | **Consumido** de `[payment.reversed]` | `transactionId`, `sourceAccountId`, `destinationAccountId`, `amount`, `currency`, `reversalReason`, `timestamp` — dispara la creación del par de asientos REVERSAL_DEBIT/REVERSAL_CREDIT |
+
+---
+
+### `kafka/`
+Capa de mensajería. Desacopla la lógica de negocio del transporte de eventos.
+
+| Clase | Qué hace |
+|-------|----------|
+| `LedgerEventConsumer` | `@KafkaListener` sobre los topics `[payment.completed]` y `[payment.reversed]`.
+Al recibir un evento, llama a `LedgerService` para crear los asientos correspondientes.
+ Si el procesamiento falla (ej: `LedgerImbalanceException`), el mensaje va a la DLQ para revisión manual sin bloquear el consumer |
+| `LedgerEventPublisher` | Publica `LedgerEntriesRecordedEvent` al topic `[ledger.entries-recorded]` una vez que los asientos quedan persistidos exitosamente.
+
+El `payment-orchestrator` escucha este evento para confirmar que el paso contable del Saga fue exitoso |
+
+---
+
+### `exception/`
+Manejo centralizado de errores para respuestas HTTP consistentes.
+
+| Clase | Qué hace |
+|-------|----------|
+| `GlobalExceptionHandler` | `@RestControllerAdvice` que captura excepciones y las convierte en respuestas JSON con código HTTP apropiado |
+| `LedgerEntryNotFoundException` | Lanzada si no existen asientos para el `accountId` solicitado → HTTP 404 |
+| `LedgerImbalanceException` | Lanzada si el monto del DEBIT no es igual al monto del CREDIT en una misma transacción → HTTP 422. Indica corrupción de datos en el evento recibido |
+
+---
+
+## 🗄️ Modelo de Base de Datos
+
+**Tabla: `ledger_entries`**
+
+```
+┌──────────────────────────┬─────────────────┬──────────────────────────────────────────────────┐
+│ Columna                  │ Tipo            │ Descripción                                       │
+├──────────────────────────┼─────────────────┼──────────────────────────────────────────────────┤
+│ id                       │ UUID (PK)       │ Identificador único del asiento contable          │
+│ transaction_id           │ UUID (INDEX)    │ Agrupa el par DEBIT/CREDIT de la misma operación │
+│ account_id               │ UUID (INDEX)    │ Cuenta a la que pertenece este asiento            │
+│ counterpart_account_id   │ UUID            │ La otra cuenta involucrada en la transferencia    │
+│ entry_type               │ VARCHAR(20)     │ ENUM: DEBIT | CREDIT | REVERSAL_DEBIT | REVERSAL_CREDIT │
+│ amount                   │ DECIMAL(19,4)   │ Monto del asiento — siempre positivo              │
+│ currency                 │ VARCHAR(3)      │ Código de moneda ISO 4217 (COP, USD, EUR)         │
+│ description              │ VARCHAR(255)    │ Descripción legible del movimiento                │
+│ created_at               │ TIMESTAMP       │ Timestamp de creación — nunca se modifica         │
+└──────────────────────────┴─────────────────┴──────────────────────────────────────────────────┘
+```
+
+> ⚠️ `ledger-service` tiene su **propia instancia de PostgreSQL** aislada. Ningún otro microservicio accede a esta base de datos directamente.
+
+> ⚠️ No existe columna `updated_at`. La inmutabilidad es un requisito de negocio, no solo técnico. Los auditores financieros deben poder confiar en que ningún registro fue alterado después de crearse.
+
+**Índices recomendados:**
+```sql
+CREATE INDEX idx_ledger_account_id ON ledger_entries(account_id);
+CREATE INDEX idx_ledger_transaction_id ON ledger_entries(transaction_id);
+CREATE INDEX idx_ledger_account_created ON ledger_entries(account_id, created_at DESC);
+```
+
+---
+
+## 📨 Eventos Kafka
+
+### Eventos Consumidos
+
+**Topic:** `payment.completed`
+
+```json
+{
+  "transactionId": "txn-9f1e2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "sourceAccountId": "acc-1a2b3c4d-...",
+  "destinationAccountId": "acc-5e6f7a8b-...",
+  "amount": 500000.00,
+  "currency": "COP",
+  "timestamp": "2025-01-15T10:31:10Z"
+}
+```
+
+**Topic:** `payment.reversed`
+
+```json
+{
+  "transactionId": "txn-9f1e2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "sourceAccountId": "acc-1a2b3c4d-...",
+  "destinationAccountId": "acc-5e6f7a8b-...",
+  "amount": 500000.00,
+  "currency": "COP",
+  "reversalReason": "PAYMENT_ORCHESTRATOR_TIMEOUT",
+  "timestamp": "2025-01-15T10:31:45Z"
+}
+```
+
+### Evento Publicado
+
+**Topic:** `ledger.entries-recorded`
+
+```json
+{
+  "transactionId": "txn-9f1e2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "debitEntryId": "entry-aaaa-...",
+  "creditEntryId": "entry-bbbb-...",
+  "amount": 500000.00,
+  "currency": "COP",
+  "timestamp": "2025-01-15T10:31:12Z"
+}
+```
+
+**Consumidor:** `payment-orchestrator` — al recibir este evento, confirma que el paso contable del Patrón Saga fue exitoso y avanza al siguiente paso.
+
+---
+
+## 📊 Contabilidad de Partida Doble
+
+Este es el principio contable central del servicio. **Por cada transferencia se crean exactamente dos asientos: un DEBIT y un CREDIT.**
+
+### Ejemplo: Juan transfiere $500.000 a María
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Transacción: txn-9f1e2a3b                        │
+├───────────────────────┬─────────────────────────────────────────────┤
+│ Asiento 1 (DEBIT)     │ Asiento 2 (CREDIT)                         │
+│ account_id: Juan      │ account_id: María                           │
+│ amount: 500.000 COP   │ amount: 500.000 COP                         │
+│ entry_type: DEBIT     │ entry_type: CREDIT                          │
+└───────────────────────┴─────────────────────────────────────────────┘
+         Σ DEBIT = Σ CREDIT → ✅ Libro contable balanceado
+```
+
+**Invariante del sistema:**
+```
+Para toda transacción T:
+  Σ amount WHERE entry_type = DEBIT AND transaction_id = T
+  =
+  Σ amount WHERE entry_type = CREDIT AND transaction_id = T
+```
+
+Si esta igualdad no se cumple, `LedgerService` lanza `LedgerImbalanceException` y el evento va a la DLQ para revisión.
+**El dinero nunca desaparece ni se crea de la nada.**
+
+### Ejemplo: Reversión del Patrón Saga
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│               Reversión de la Transacción: txn-9f1e2a3b             │
+├───────────────────────────┬─────────────────────────────────────────┤
+│ Asiento 3 (REVERSAL_CREDIT)│ Asiento 4 (REVERSAL_DEBIT)            │
+│ account_id: Juan          │ account_id: María                       │
+│ amount: 500.000 COP       │ amount: 500.000 COP                     │
+│ entry_type: REVERSAL_CREDIT│ entry_type: REVERSAL_DEBIT             │
+└───────────────────────────┴─────────────────────────────────────────┘
+   Los 4 asientos de Juan: -500k (DEBIT) +500k (REVERSAL_CREDIT) = 0 neto ✅
+   Los 4 asientos de María: +500k (CREDIT) -500k (REVERSAL_DEBIT) = 0 neto ✅
+```
+
+> Los asientos originales **nunca se borran**. Se crean nuevos asientos de compensación. Esto preserva la trazabilidad completa de auditoría.
+
+---
+
+## 🔁 Event Sourcing
+
+`BalanceCalculatorService` implementa el patrón Event Sourcing: **el saldo de una cuenta no se almacena como un valor en una columna, se calcula en tiempo real sumando todos sus asientos históricos.**
+
+```
+Saldo actual de Juan =
+  Σ amount WHERE account_id = Juan AND entry_type IN (CREDIT, REVERSAL_CREDIT)
+  -
+  Σ amount WHERE account_id = Juan AND entry_type IN (DEBIT, REVERSAL_DEBIT)
+```
+
+**Ventaja clave:** Se puede calcular el saldo de una cuenta en cualquier momento del pasado pasando un parámetro `asOf`:
+
+```
+GET /ledger/{accountId}/balance?asOf=2025-06-15T00:00:00Z
+```
+
+Esto permite auditorías históricas exactas: "¿Cuánto dinero tenía este cliente exactamente al momento de la transferencia disputada?"
+
+---
+
+## 📦 Dependencias
+
+**`pom.xml` — Spring Initializr:**
+
+| Dependencia | Uso |
+|-------------|-----|
+| `spring-boot-starter-web` | Servidor HTTP y endpoints REST de consulta |
+| `spring-boot-starter-data-jpa` | ORM con Hibernate para persistencia de asientos |
+| `postgresql` | Driver JDBC de PostgreSQL |
+| `spring-boot-starter-security` | Seguridad base y filtros HTTP |
+| `spring-boot-starter-oauth2-resource-server` | Validación de JWT como Resource Server |
+| `spring-boot-starter-validation` | Validaciones `@Valid` en DTOs de consulta |
+| `spring-kafka` | Consumir eventos de Kafka y publicar confirmaciones |
+| `lombok` | Reducir boilerplate (getters, constructores, builders) |
+-
+---
+
+## ⚙️ Variables de Entorno
+
+Definidas en `application.yml` e inyectables como variables de entorno en Docker:
+
+```yaml
+server:
+  port: 8084
+
+spring:
+  datasource:
+    url: jdbc:postgresql://ledger-db:5432/ledger_db
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKER}
+    consumer:
+      group-id: ledger-service-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.finnode.*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI}
+```
+
+| Variable | Descripción | Ejemplo |
+|----------|-------------|---------|
+| `DB_USER` | Usuario de PostgreSQL | `ledger_user` |
+| `DB_PASSWORD` | Contraseña de PostgreSQL | `s3cr3t` |
+| `KAFKA_BROKER` | Host y puerto de Kafka | `kafka:9092` |
+| `JWT_ISSUER_URI` | URI del emisor JWT para validación | `http://auth-service:8081` |
+
+---
+
+## 🐳 Docker Compose Local
+
+Archivo: `ledger-service/docker-compose.yml`
+
+Levanta `ledger-service`, `ledger-db` (PostgreSQL) y `kafka` (single-node KRaft).
+
+```sh
+cd /home/Dainover/Documentos/finnode/ledger-service
+docker compose up -d --build
+```
+
+Ver logs del servicio:
+
+```sh
+cd /home/Dainover/Documentos/finnode/ledger-service
+docker compose logs -f ledger-service
+```
+
+Detener y limpiar contenedores:
+
+```sh
+cd /home/Dainover/Documentos/finnode/ledger-service
+docker compose down
+```
+
+Si el `auth-service` corre fuera de Docker, ajusta el issuer antes de levantar:
+
+```sh
+cd /home/Dainover/Documentos/finnode/ledger-service
+JWT_ISSUER_URI=http://host.docker.internal:8081 docker compose up -d --build
+```
+
+---
+
+## 🔄 Flujo Interno: Registro de Asientos (Pago Exitoso)
+
+```
+Kafka [payment.completed]
+        │
+        ▼
+LedgerEventConsumer.onPaymentCompleted()
+        │
+        ▼
+LedgerService.recordEntries()
+        ├── Valida que amount > 0 y currency no sea nulo
+        ├── Crea LedgerEntry tipo DEBIT  (cuenta origen)
+        ├── Crea LedgerEntry tipo CREDIT (cuenta destino)
+        ├── Valida: debit.amount == credit.amount → LedgerImbalanceException si no cuadra
+        ├── Persiste ambos asientos en una sola @Transactional (los dos o ninguno)
+        └── Publica LedgerEntriesRecordedEvent → Kafka [ledger.entries-recorded]
+```
+
+## 🔄 Flujo Interno: Registro de Asientos (Reversión Saga)
+
+```
+Kafka [payment.reversed]
+        │
+        ▼
+LedgerEventConsumer.onPaymentReversed()
+        │
+        ▼
+LedgerService.recordReversalEntries()
+        ├── Busca los asientos originales por transactionId
+        ├── Crea LedgerEntry tipo REVERSAL_CREDIT (devuelve fondos a cuenta origen)
+        ├── Crea LedgerEntry tipo REVERSAL_DEBIT  (retira fondos de cuenta destino)
+        ├── Persiste ambos asientos en una sola @Transactional
+        └── Publica LedgerEntriesRecordedEvent → Kafka [ledger.entries-recorded]
+            con flag reversalConfirmed: true
+```
+
+## 🔄 Flujo Interno: Consulta de Historial (CQRS Query)
+
+```
+GET /ledger/{accountId}/entries
+        │
+        ▼
+LedgerController.getHistory()
+        │  Extrae userId del JWT, valida ownership de la cuenta
+        ▼
+LedgerService.getHistory()
+        ├── Consulta todos los LedgerEntry WHERE account_id = :accountId
+        ├── Ordena por createdAt DESC
+        ├── Mapea a lista de LedgerEntryResponse
+        └── Retorna LedgerHistoryResponse con totales calculados
+```
+
+---
+
+*`ledger-service` — Porque la verdad financiera vive en el historial, no en un número almacenado.*
