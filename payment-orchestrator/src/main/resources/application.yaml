@@ -1,3 +1,96 @@
+server:
+  port: 8083
+
 spring:
   application:
     name: payment-orchestrator
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:payment_db}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 20000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQL10Dialect
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKER:kafka:9092}
+    consumer:
+      group-id: payment-orchestrator-group
+      auto-offset-reset: earliest
+      max-poll-records: 100
+      session-timeout-ms: 10000
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring:
+          json:
+            trusted:
+              packages: "com.finnode.*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI:http://auth-service:8081}
+          jwk-set-uri: ${JWT_JWK_SET_URI:http://auth-service:8081/.well-known/jwks.json}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.1
+
+# Configuración de fraude
+fraud:
+  risk-threshold: ${FRAUD_RISK_THRESHOLD:0.75}
+  system-prompt: "Eres un experto en detección de fraude. Analiza transacciones y responde siempre en JSON con: {\"approved\": boolean, \"riskScore\": 0.0-1.0, \"reason\": string}"
+
+# Configuración de Feign
+feign:
+  client:
+    config:
+      account-service:
+        url: ${ACCOUNT_SERVICE_URL:http://account-service:8082}
+        connectTimeout: 3000
+        readTimeout: 5000
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.finnode: DEBUG
+    org.springframework.kafka: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+

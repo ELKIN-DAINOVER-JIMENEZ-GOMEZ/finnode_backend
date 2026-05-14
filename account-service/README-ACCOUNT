@@ -1,6 +1,7 @@
 # 🏦 account-service — El Núcleo de las Cuentas Bancarias
 
-> Microservicio de FinNode responsable del ciclo de vida completo de las cuentas bancarias. Gestiona saldos, reserva de fondos y liberación de recursos con control de concurrencia. Es el servicio de mayor carga del sistema.
+> Microservicio de FinNode responsable del ciclo de vida completo de las cuentas bancarias.
+Gestiona saldos, reserva de fondos y liberación de recursos con control de concurrencia. Es el servicio de mayor carga del sistema.
 
 ---
 

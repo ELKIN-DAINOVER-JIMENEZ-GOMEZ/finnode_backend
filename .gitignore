@@ -1,0 +1,75 @@
+# ============================================================================
+# .gitignore - FinNode Project
+# ============================================================================
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Build artifacts
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+*.class
+*.log
+
+# Spring
+.springBeans
+.sts4-cache/
+
+# Docker
+docker-compose.override.yml
+.docker/
+.dockerignore
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node modules (si hay algún archivo Node en el proyecto)
+node_modules/
+
+# Misc
+.classpath
+.project
+.settings/
+*.iml
+*.sublime-workspace
+.cache/
+
+# OS-specific
+Thumbs.db
+.gradle/
+.gradletasknamecache
+
+# Kubernetes
+*.yaml.bak
+*.yml.bak
+
+# Temporal files
+tmp/
+temp/
+*.tmp
+

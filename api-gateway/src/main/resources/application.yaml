@@ -1,3 +1,23 @@
 spring:
   application:
     name: api-gateway
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI:http://localhost:8081}
+          jwk-set-uri: ${JWT_JWK_SET_URI:http://localhost:9999/mock-jwks}
+
+services:
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8081}
+  account-service:
+    url: ${ACCOUNT_SERVICE_URL:http://localhost:8082}
+  payment-orchestrator:
+    url: ${PAYMENT_ORCHESTRATOR_URL:http://localhost:8083}
+  ledger-service:
+    url: ${LEDGER_SERVICE_URL:http://localhost:8084}
+
+server:
+  port: ${SERVER_PORT:8080}
+

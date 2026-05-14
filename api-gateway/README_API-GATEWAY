@@ -1,0 +1,257 @@
+# 🛡️ api-gateway — El Portero del Sistema
+
+> Microservicio de FinNode que actúa como único punto de entrada al sistema.
+> Valida el JWT de cada petición entrante, rechaza el tráfico no autenticado antes de que llegue
+> a cualquier microservicio, y enruta cada solicitud al servicio correcto según el path.
+
+---
+
+## 📋 Tabla de Contenidos
+
+- [Responsabilidades](#-responsabilidades)
+- [Rutas Configuradas](#-rutas-configuradas)
+- [Estructura de Carpetas](#-estructura-de-carpetas)
+- [Descripción de Cada Capa](#-descripción-de-cada-capa)
+- [Seguridad](#-seguridad)
+- [Dependencias](#-dependencias)
+- [Variables de Entorno](#-variables-de-entorno)
+
+---
+
+## ✅ Responsabilidades
+
+| # | Responsabilidad | Descripción |
+|---|----------------|-------------|
+| 1 | **Punto de entrada único** | Ningún microservicio está expuesto directamente al exterior. Todo el tráfico entra por el puerto `8080` del gateway |
+| 2 | **Validación de JWT** | Intercepta cada petición y verifica la firma, expiración y claims del token antes de enrutarla. Si el JWT es inválido, responde `401 Unauthorized` sin consultar ningún servicio |
+| 3 | **Enrutamiento** | Mapea los paths de entrada (`/api/auth/**`, `/api/accounts/**`, etc.) al microservicio interno correspondiente según la configuración declarativa en `application.yml` |
+| 4 | **Barrera de seguridad perimetral** | Las rutas públicas (registro, login) se declaran explícitamente. Cualquier ruta no declarada como pública requiere autenticación |
+| 5 | **Propagación del JWT** | Reenvía el header `Authorization: Bearer <token>` original al microservicio destino, para que cada servicio pueda extraer el `userId` y otros claims sin volver a autenticarse con el gateway |
+
+---
+
+## 🌐 Rutas Configuradas
+
+```
+/api/auth/register   → auth-service      :8081   [PÚBLICA]
+/api/auth/login      → auth-service      :8081   [PÚBLICA]
+/api/auth/**         → auth-service      :8081   [PROTEGIDA]
+/api/accounts/**     → account-service   :8082   [PROTEGIDA]
+/api/payments/**     → payment-orchestrator :8083 [PROTEGIDA]
+/api/ledger/**       → ledger-service    :8084   [PROTEGIDA]
+```
+
+> ⚠️ El gateway **no expone ningún endpoint propio con lógica de negocio**. Solo enruta. Si una ruta no está definida en `application.yml`, el gateway responde `404 Not Found` sin consultar ningún servicio interno.
+
+---
+
+## 📁 Estructura de Carpetas
+
+```
+api-gateway/
+├── src/
+│   ├── main/
+│   │   ├── java/com/finnode/gateway/
+│   │   │   │
+│   │   │   ├── ApiGatewayApplication.java                   ← Punto de entrada del microservicio
+│   │   │   │
+│   │   │   ├── config/
+│   │   │   │   ├── SecurityConfig.java                      ← Define rutas públicas/protegidas y configura validación JWT reactiva
+│   │   │   │   └── GatewayRoutesConfig.java                 ← Define programáticamente las rutas (alternativa a application.yml)
+│   │   │   │
+│   │   │   └── exception/
+│   │   │       └── GatewayExceptionHandler.java             ← Respuestas de error uniformes en JSON (401, 403, 404, 503)
+│   │   │
+│   │   └── resources/
+│   │       └── application.yml                              ← Rutas declarativas, puertos de microservicios, JWT issuer
+│   │
+│   └── test/
+│       └── java/com/finnode/gateway/
+│           └── config/
+│               └── SecurityConfigTest.java                  ← Verifica que rutas públicas no requieren JWT y protegidas sí
+│
+├── pom.xml                                                  ← Dependencias Maven del microservicio
+└── Dockerfile                                               ← Imagen Docker del servicio
+```
+
+---
+
+## 📐 Descripción de Cada Capa
+
+### `config/`
+Configuración pura. Todo el comportamiento del gateway se define aquí de forma declarativa.
+
+| Clase | Qué hace |
+|-------|----------|
+| `SecurityConfig` | Define el `SecurityWebFilterChain` reactivo. Marca `/api/auth/register` y `/api/auth/login` como rutas públicas. Todas las demás rutas requieren JWT válido. Configura el `ReactiveJwtDecoder` apuntando al `issuer-uri` del `auth-service` para validar la firma del token |
+| `GatewayRoutesConfig` | Define programáticamente las rutas de Spring Cloud Gateway usando el `RouteLocatorBuilder`. Equivalente a la configuración YAML pero en código Java, lo que permite agregar filtros por ruta (ej: agregar headers, rate limiting por path) |
+
+---
+
+### `exception/`
+Manejo de errores a nivel de gateway para respuestas HTTP consistentes.
+
+| Clase | Qué hace |
+|-------|----------|
+| `GatewayExceptionHandler` | Implementa `ErrorWebExceptionHandler` para capturar errores del gateway antes de que salgan al cliente. Convierte errores en respuestas JSON con estructura uniforme: `{ "status": 401, "error": "Unauthorized", "message": "Token JWT inválido o expirado" }`. Maneja: JWT inválido (401), acceso denegado (403), ruta no encontrada (404), microservicio caído (503) |
+
+---
+
+## 🔒 Seguridad
+
+### Modelo de seguridad
+
+El `api-gateway` opera como **Resource Server reactivo** usando `spring-boot-starter-oauth2-resource-server`. No emite tokens; solo los valida.
+
+```
+Cliente → [Authorization: Bearer <jwt>]
+               │
+               ▼
+        api-gateway :8080
+               │
+               ├── Extrae el JWT del header
+               ├── Descarga la clave pública del auth-service (JWKS endpoint)
+               ├── Verifica firma criptográfica
+               ├── Verifica expiración (exp claim)
+               └── Si todo OK → enruta al microservicio destino
+                   con el header Authorization intacto
+```
+
+### Rutas públicas vs. protegidas
+
+| Path | Autenticación | Motivo |
+|------|---------------|--------|
+| `POST /api/auth/register` | ❌ Pública | El usuario aún no tiene token |
+| `POST /api/auth/login` | ❌ Pública | El usuario aún no tiene token |
+| `POST /api/auth/refresh` | ✅ Protegida | Requiere refresh token válido |
+| `GET /api/accounts/**` | ✅ Protegida | Datos bancarios sensibles |
+| `POST /api/payments/**` | ✅ Protegida | Operaciones financieras |
+| `GET /api/ledger/**` | ✅ Protegida | Historial contable privado |
+
+### ¿Qué pasa si el JWT es inválido?
+
+El gateway responde directamente sin consultar ningún microservicio interno:
+
+```json
+{
+  "status": 401,
+  "error": "Unauthorized",
+  "message": "Token JWT inválido o expirado",
+  "timestamp": "2025-01-15T10:30:00Z"
+}
+```
+
+---
+
+## 📦 Dependencias
+
+> ⚠️ Este servicio **NO usa** `Spring Web`, `Spring Data JPA` ni `PostgreSQL Driver`. Corre sobre un servidor **reactivo (Netty)** mediante Spring WebFlux.
+
+**`pom.xml` — Spring Initializr:**
+
+| Dependencia | Uso |
+|-------------|-----|
+| `spring-cloud-starter-gateway` | Núcleo del gateway reactivo: enrutamiento, filtros, predicados de path |
+| `spring-boot-starter-oauth2-resource-server` | Validación de JWT reactiva sin bloquear hilos |
+| `lombok` | Reducir boilerplate |
+
+---
+
+## ⚙️ Variables de Entorno
+
+Definidas en `application.yml` e inyectables como variables de entorno en Docker:
+
+```yaml
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      routes:
+        # ── auth-service ──────────────────────────────────────────────
+        - id: auth-register
+          uri: http://auth-service:8081
+          predicates:
+            - Path=/api/auth/register
+          filters:
+            - StripPrefix=0
+
+        - id: auth-login
+          uri: http://auth-service:8081
+          predicates:
+            - Path=/api/auth/login
+          filters:
+            - StripPrefix=0
+
+        - id: auth-service
+          uri: http://auth-service:8081
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - StripPrefix=0
+
+        # ── account-service ───────────────────────────────────────────
+        - id: account-service
+          uri: http://account-service:8082
+          predicates:
+            - Path=/api/accounts/**
+          filters:
+            - StripPrefix=0
+
+        # ── payment-orchestrator ──────────────────────────────────────
+        - id: payment-orchestrator
+          uri: http://payment-orchestrator:8083
+          predicates:
+            - Path=/api/payments/**
+          filters:
+            - StripPrefix=0
+
+        # ── ledger-service ────────────────────────────────────────────
+        - id: ledger-service
+          uri: http://ledger-service:8084
+          predicates:
+            - Path=/api/ledger/**
+          filters:
+            - StripPrefix=0
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI}
+```
+
+| Variable | Descripción | Ejemplo |
+|----------|-------------|---------|
+| `JWT_ISSUER_URI` | URI del `auth-service` para validar firma JWT (JWKS) | `http://auth-service:8081` |
+
+> El gateway no necesita credenciales de base de datos, Kafka ni API keys externas.
+Su única dependencia de configuración es el `issuer-uri` para descargar la clave pública de validación de tokens.
+
+---
+
+## 🔗 Relación con otros microservicios
+
+```
+Internet / Frontend Angular
+            │
+            ▼
+     api-gateway :8080
+     [valida JWT aquí]
+            │
+     ┌──────┼──────────────────────────┐
+     ▼      ▼            ▼             ▼
+ auth    account    payment-      ledger
+ :8081   :8082      orchestrator  :8084
+                    :8083
+```
+
+El `api-gateway` es el **único servicio con puerto expuesto al exterior** en el `docker-compose.yml`. Los demás microservicios están en una red interna de Docker y solo son accesibles entre sí o a través del gateway.
+
+---
+
+*`api-gateway` — Porque la primera línea de defensa de un sistema financiero no negocia con tokens inválidos.*
