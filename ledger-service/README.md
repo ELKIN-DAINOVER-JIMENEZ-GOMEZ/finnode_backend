@@ -43,7 +43,8 @@ GET  /ledger/{accountId}/balance              → Saldo calculado por Event Sour
 GET  /ledger/transactions/{transactionId}     → Todos los asientos de una transacción específica
 ```
 
-> ⚠️ Este servicio **no expone endpoints de escritura REST**. Los asientos contables se crean exclusivamente al consumir eventos de Kafka publicados por el `payment-orchestrator`. Esto garantiza que ningún agente externo pueda manipular el libro contable directamente.
+> ⚠️ Este servicio **no expone endpoints de escritura REST**. Los asientos contables se crean exclusivamente al consumir eventos de Kafka publicados
+por el `payment-orchestrator`. Esto garantiza que ningún agente externo pueda manipular el libro contable directamente.
 
 > Todos los endpoints de lectura requieren JWT válido. El token es validado por el `api-gateway` antes de que la petición llegue a este servicio.
 
@@ -51,7 +52,7 @@ GET  /ledger/transactions/{transactionId}     → Todos los asientos de una tran
 
 ## 📁 Estructura de Carpetas
 
-```
+``
 ledger-service/
 ├── src/
 │   ├── main/

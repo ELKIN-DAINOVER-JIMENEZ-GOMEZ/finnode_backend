@@ -2,7 +2,7 @@ package com.finnode.auth.service;
 
 import static org.assertj.core.api.Assertions.*;
 
-import io.jsonwebtoken.JwtException;
+import com.finnode.auth.config.JwtConfig;
 import java.util.Date;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,11 +10,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Tests unitarios para JwtService.
- *
  * Valida que:
  *  - Se generan tokens con claims correctos
  *  - Los tokens incluyen la expiración esperada
@@ -38,11 +36,12 @@ class JwtServiceTest {
 
 	@BeforeEach
 	void setUp() {
-		jwtService = new JwtService();
-		ReflectionTestUtils.setField(jwtService, "jwtSecret", JWT_SECRET);
-		ReflectionTestUtils.setField(jwtService, "accessTokenExpiry", ACCESS_TOKEN_EXPIRY);
-		ReflectionTestUtils.setField(jwtService, "refreshTokenExpiry", REFRESH_TOKEN_EXPIRY);
-		ReflectionTestUtils.setField(jwtService, "issuer", ISSUER);
+		JwtConfig jwtConfig = new JwtConfig();
+		jwtConfig.setSecret(JWT_SECRET);
+		jwtConfig.setAccessTokenExpiry(ACCESS_TOKEN_EXPIRY);
+		jwtConfig.setRefreshTokenExpiry(REFRESH_TOKEN_EXPIRY);
+		jwtConfig.setIssuer(ISSUER);
+		jwtService = new JwtService(jwtConfig);
 	}
 
 	// =========================================================================

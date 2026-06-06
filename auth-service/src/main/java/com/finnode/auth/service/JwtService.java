@@ -1,13 +1,11 @@
 package com.finnode.auth.service;
 
-
-
+import com.finnode.auth.config.JwtConfig;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
@@ -28,21 +26,11 @@ import java.util.UUID;
 @Service
 public class JwtService {
 
-    // -----------------------------------------------------------------------
-    // Propiedades inyectadas desde application.yml
-    // -----------------------------------------------------------------------
+    private final JwtConfig jwtConfig;
 
-    @Value("${jwt.secret}")
-    private String jwtSecret;
-
-    @Value("${jwt.access-token-expiry}")
-    private long accessTokenExpiry;       // en milisegundos (ej: 900_000 = 15 min)
-
-    @Value("${jwt.refresh-token-expiry}")
-    private long refreshTokenExpiry;      // en milisegundos (ej: 604_800_000 = 7 días)
-
-    @Value("${jwt.issuer}")
-    private String issuer;                // ej: "finnode-auth"
+    public JwtService(JwtConfig jwtConfig) {
+        this.jwtConfig = jwtConfig;
+    }
 
     // -----------------------------------------------------------------------
     // Claims personalizados (nombres de los campos dentro del token)
@@ -79,7 +67,7 @@ public class JwtService {
      */
     public String generateAccessToken(UUID userId, String email, String role) {
         Date now    = new Date();
-        Date expiry = new Date(now.getTime() + accessTokenExpiry);
+        Date expiry = new Date(now.getTime() + jwtConfig.getAccessTokenExpiry());
 
         return Jwts.builder()
                 .subject(userId.toString())
@@ -87,7 +75,7 @@ public class JwtService {
                 .claim(CLAIM_EMAIL, email)
                 .claim(CLAIM_ROLE, role)
                 .claim(CLAIM_TOKEN_TYPE, TYPE_ACCESS)
-                .issuer(issuer)
+                .issuer(jwtConfig.getIssuer())
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(buildSigningKey())
@@ -105,13 +93,13 @@ public class JwtService {
      */
     public String generateRefreshToken(UUID userId) {
         Date now    = new Date();
-        Date expiry = new Date(now.getTime() + refreshTokenExpiry);
+        Date expiry = new Date(now.getTime() + jwtConfig.getRefreshTokenExpiry());
 
         return Jwts.builder()
                 .subject(userId.toString())
                 .claim(CLAIM_USER_ID, userId.toString())
                 .claim(CLAIM_TOKEN_TYPE, TYPE_REFRESH)
-                .issuer(issuer)
+                .issuer(jwtConfig.getIssuer())
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(buildSigningKey())
@@ -233,7 +221,7 @@ public class JwtService {
      * El secret debe tener al menos 256 bits (32 caracteres) en producción.
      */
     private SecretKey buildSigningKey() {
-        byte[] keyBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
+        byte[] keyBytes = jwtConfig.getSecret().getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }

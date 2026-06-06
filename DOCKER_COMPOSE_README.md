@@ -284,9 +284,9 @@ Para producción:
 ## 📞 Soporte
 
 Para problemas específicos de cada servicio, revisar:
-- `account-service/README-ACCOUNT`
-- `auth-service/README`
-- `api-gateway/README_API-GATEWAY`
-- `ledger-service/README_LEDGER-SERVICE`
-- `payment-orchestrator/README_PAYMENT-ORQUESTRATOR`
+- `account-service/README.md`
+- `auth-service/README.md`
+- `api-gateway/README.md`
+- `ledger-service/README.md`
+- `payment-orchestrator/README.md`
 
