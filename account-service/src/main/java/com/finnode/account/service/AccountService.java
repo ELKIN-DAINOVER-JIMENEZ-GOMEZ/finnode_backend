@@ -1,5 +1,6 @@
 package com.finnode.account.service;
 
+import com.finnode.account.dto.*;
 import com.finnode.account.event.*;
 import com.finnode.account.exception.*;
 import com.finnode.account.kafka.AccountEventPublisher;
@@ -48,6 +49,26 @@ public class AccountService {
     }
 
     // -------------------------------------------------------------------------
+    // Consultar saldo (CQRS Query)
+    // -------------------------------------------------------------------------
+
+    public BalanceResponse getBalance(UUID accountId) {
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+        return BalanceResponse.from(account);
+    }
+
+    // -------------------------------------------------------------------------
+    // Consultar detalle completo de la cuenta (CQRS Query)
+    // -------------------------------------------------------------------------
+
+    public AccountResponse getAccountDetails(UUID accountId) {
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+        return AccountResponse.from(account);
+    }
+
+    // -------------------------------------------------------------------------
     // Reservar fondos (CQRS Command — llamado por el Controller REST)
     // -------------------------------------------------------------------------
 
@@ -83,6 +104,54 @@ public class AccountService {
                         .timestamp(Instant.now())
                         .build()
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Confirmar débito definitivo (CQRS Command)
+    // -------------------------------------------------------------------------
+
+    @Transactional
+    public void confirmDebit(UUID accountId, String transactionId, BigDecimal amount) {
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+
+        validateActive(account);
+
+        // Descuenta el saldo real
+        BigDecimal newBalance = account.getBalance().subtract(amount);
+        if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
+            newBalance = BigDecimal.ZERO;
+        }
+        account.setBalance(newBalance);
+
+        // Libera la reserva
+        BigDecimal newReserved = account.getReservedBalance().subtract(amount);
+        if (newReserved.compareTo(BigDecimal.ZERO) < 0) {
+            newReserved = BigDecimal.ZERO;
+        }
+        account.setReservedBalance(newReserved);
+
+        accountRepository.save(account);
+        log.info("Débito confirmado | transactionId={} | accountId={} | amount={}", transactionId, accountId, amount);
+    }
+
+    // -------------------------------------------------------------------------
+    // Acreditar fondos (CQRS Command)
+    // -------------------------------------------------------------------------
+
+    @Transactional
+    public void creditFunds(UUID accountId, String transactionId, BigDecimal amount, UUID sourceAccountId) {
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+
+        validateActive(account);
+
+        // Incrementa el saldo disponible (sin afectar reservedBalance)
+        account.setBalance(account.getBalance().add(amount));
+        accountRepository.save(account);
+
+        log.info("Fondos acreditados | transactionId={} | destinationAccountId={} | sourceAccountId={} | amount={}",
+                transactionId, accountId, sourceAccountId, amount);
     }
 
     // -------------------------------------------------------------------------

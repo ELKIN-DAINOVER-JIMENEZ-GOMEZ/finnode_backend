@@ -2,11 +2,10 @@ package com.finnode.gateway.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
+import org.springframework.security.config.web.server.ServerHttpSecurity;
+import org.springframework.security.web.server.SecurityWebFilterChain;
 
 /**
  * Configuración de seguridad del api-gateway.
@@ -32,27 +31,18 @@ import org.springframework.security.web.SecurityFilterChain;
  */
 
 @Configuration
-@EnableWebSecurity
+@EnableWebFluxSecurity
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
         return http
-                // Sin estado: el gateway no guarda sesiones
-                .csrf(AbstractHttpConfigurer::disable)
-
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-
-                .authorizeHttpRequests(exchanges -> exchanges
-                        // Rutas públicas: el usuario aún no tiene token
-                        .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
-
-                        // Todo lo demás requiere JWT válido
-                        .anyRequest().authenticated()
+                .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .authorizeExchange(exchanges -> exchanges
+                        .pathMatchers("/api/auth/register", "/api/auth/login").permitAll()
+                        .anyExchange().authenticated()
                 )
-                // Resource Server servlet: valida JWT en cada petición
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {}))
-
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
                 .build();
     }
 }

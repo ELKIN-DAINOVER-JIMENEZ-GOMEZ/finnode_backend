@@ -134,6 +134,14 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SERVER_PORT: 8084
       FINNODE_ENV: docker
+      # Configuración de BD compartida (usar el servicio 'postgres' de este compose)
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ledger_db
+      DB_USER: ledger_user
+      DB_PASSWORD: Dainover
+      # URL del JWK del auth-service para que Spring cree el JwtDecoder automáticamente
+      JWT_JWK_SET_URI: http://auth-service:8081/.well-known/jwks.json
     ports:
       - "8084:8084"
     networks:

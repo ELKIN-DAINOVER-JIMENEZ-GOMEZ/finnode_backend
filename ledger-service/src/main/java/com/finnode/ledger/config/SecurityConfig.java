@@ -2,6 +2,7 @@ package com.finnode.ledger.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -42,6 +43,9 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    @Value("${finnode.env:local}")
+    private String finnodeEnv;
+
     /**
      * Define la cadena de filtros de seguridad HTTP.
      *
@@ -51,6 +55,21 @@ public class SecurityConfig {
      */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        // En entorno local/desarrollo permitimos arrancar el servicio sin
+        // depender de un auth-service externo. En ese modo, todos los
+        // endpoints quedan permitidos (no se valida JWT). Esto facilita
+        // el desarrollo y pruebas unitarias sin desplegar otros microservicios.
+        // EN PRODUCCIÓN este valor debe ser distinto de 'local' y se usará
+        // el Resource Server JWT normal.
+        if ("local".equalsIgnoreCase(finnodeEnv) || "dev".equalsIgnoreCase(finnodeEnv)) {
+
+            http
+                    .csrf(AbstractHttpConfigurer::disable)
+                    .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                    .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+
+            return http.build();
+        }
 
         http
                 // ----------------------------------------------------------------

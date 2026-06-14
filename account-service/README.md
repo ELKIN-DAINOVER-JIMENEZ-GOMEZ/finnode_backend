@@ -1,3 +1,4 @@
+
 # 🏦 account-service — El Núcleo de las Cuentas Bancarias
 
 > Microservicio de FinNode responsable del ciclo de vida completo de las cuentas bancarias.

@@ -1,29 +1,47 @@
+server:
+  port: 8081
+
 spring:
   application:
     name: auth-service
+
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5532}/${DB_NAME:auth_db}
     username: ${DB_USER:auth_user}
     password: ${DB_PASSWORD:Dainover}
     driver-class-name: org.postgresql.Driver
+
   jpa:
     hibernate:
       ddl-auto: update
     show-sql: false
     open-in-view: false
+
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI:http://localhost:8081}
 
 kafka:
   topics:
     user-registered: user.registered
 
 jwt:
-  # Minimo 32 caracteres para HS256 en entornos reales.
-  secret: change-me-please-with-a-32-char-secret
+  secret: ${JWT_SECRET:change-me-please-with-a-32-char-secret}
   access-token-expiry: 900000
   refresh-token-expiry: 604800000
   issuer: finnode-auth
+
+logging:
+  level:
+    root: INFO
+    com.finnode: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

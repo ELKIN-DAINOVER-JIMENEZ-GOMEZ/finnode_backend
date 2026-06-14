@@ -1,36 +1,43 @@
-server:
-  port: 8083
-
+# Configuración base para payment-orchestrator
 spring:
   application:
     name: payment-orchestrator
 
+  # ── BASE DE DATOS ──────────────────────────────────────────────────────────
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:payment_db}
-    username: ${DB_USER:postgres}
-    password: ${DB_PASSWORD:postgres}
+    url: ${DB_URL:jdbc:postgresql://localhost:5535/payment_db}
+    username: ${DB_USERNAME:payment_user}
+    password: ${DB_PASSWORD:Dainover}
+    driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 10
+      pool-name: PaymentHikariPool
+      maximum-pool-size: ${DB_POOL_SIZE:10}
       minimum-idle: 2
       connection-timeout: 20000
+      idle-timeout: 600000
+      max-lifetime: 1800000
 
+  # ── JPA / HIBERNATE ────────────────────────────────────────────────────────
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: ${JPA_DDL_AUTO:update}   # 'validate' en prod, 'update' en dev
     show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQL10Dialect
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
         jdbc:
           batch_size: 20
         order_inserts: true
         order_updates: true
 
+  # ── KAFKA ──────────────────────────────────────────────────────────────────
   kafka:
-    bootstrap-servers: ${KAFKA_BROKER:kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
-      group-id: payment-orchestrator-group
+      group-id: ${SPRING_KAFKA_CONSUMER_GROUP_ID:payment-orchestrator-group}
       auto-offset-reset: earliest
+      enable-auto-commit: false
       max-poll-records: 100
       session-timeout-ms: 10000
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
@@ -41,18 +48,23 @@ spring:
             trusted:
               packages: "com.finnode.*"
     producer:
+      bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       acks: all
       retries: 3
+    listener:
+      concurrency: 3
 
+  # ── SECURITY: Resource Server JWT ─────────────────────────────────────────
   security:
     oauth2:
       resourceserver:
         jwt:
           issuer-uri: ${JWT_ISSUER_URI:http://auth-service:8081}
-          jwk-set-uri: ${JWT_JWK_SET_URI:http://auth-service:8081/.well-known/jwks.json}
+          jwk-set-uri: ${JWT_JWK_SET_URI:http://localhost:8081/.well-known/jwks.json}
 
+  # ── AI / OPENAI ───────────────────────────────────────────────────────────
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}
@@ -61,12 +73,11 @@ spring:
           model: gpt-4o-mini
           temperature: 0.1
 
-# Configuración de fraude
-fraud:
-  risk-threshold: ${FRAUD_RISK_THRESHOLD:0.75}
-  system-prompt: "Eres un experto en detección de fraude. Analiza transacciones y responde siempre en JSON con: {\"approved\": boolean, \"riskScore\": 0.0-1.0, \"reason\": string}"
+# ── SERVIDOR ────────────────────────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8083}
 
-# Configuración de Feign
+# ── FEIGN ────────────────────────────────────────────────────────────────────
 feign:
   client:
     config:
@@ -75,7 +86,12 @@ feign:
         connectTimeout: 3000
         readTimeout: 5000
 
-# Logging
+# ── FRAUDE ───────────────────────────────────────────────────────────────────
+fraud:
+  risk-threshold: ${FRAUD_RISK_THRESHOLD:0.75}
+  system-prompt: "Eres un experto en detección de fraude. Analiza transacciones y responde siempre en JSON con: {\"approved\": boolean, \"riskScore\": 0.0-1.0, \"reason\": string}"
+
+# ── LOGGING ─────────────────────────────────────────────────────────────────
 logging:
   level:
     root: INFO
@@ -85,6 +101,7 @@ logging:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
 
+# ── ACTUATOR ─────────────────────────────────────────────────────────────────
 management:
   endpoints:
     web:
@@ -94,3 +111,6 @@ management:
     health:
       show-details: always
 
+# ── FINNODE ──────────────────────────────────────────────────────────────────
+finnode:
+  env: ${FINNODE_ENV:local}

@@ -3,42 +3,65 @@ spring:
   application:
     name: ledger-service
 
-  # Propiedades de Kafka (se pueden sobrescribir con variables de entorno)
-  kafka:
-    # Dirección(s) del broker Kafka. Por defecto apunta a localhost:9092
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  # ── BASE DE DATOS ──────────────────────────────────────────────────────────
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5534/ledger_db}
+    username: ${DB_USERNAME:ledger_user}
+    password: ${DB_PASSWORD:Dainover}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: LedgerHikariPool
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
 
-    # CONFIGURACIÓN DEL CONSUMER
+  # ── JPA / HIBERNATE ────────────────────────────────────────────────────────
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:update}   # 'validate' en prod, 'update' en dev (por defecto cambiado a 'update' para desarrollo local)
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          batch_size: 25
+        order_inserts: true
+        order_updates: true
+
+  # ── KAFKA ──────────────────────────────────────────────────────────────────
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
-      # Grupo por defecto del consumer (se usa en KafkaConsumerConfig)
       group-id: ${SPRING_KAFKA_CONSUMER_GROUP_ID:ledger-service-group}
-      # Si no hay offset guardado, leer desde el mensaje más antiguo
       auto-offset-reset: earliest
-      # deshabilitamos el auto-commit: se usa ACK manual en el código
       enable-auto-commit: false
-      # paquetes confiables para deserialización JSON (si se usa JsonMessageConverter)
       properties:
         spring.json.trusted.packages: com.finnode.ledger
-
-    # CONFIGURACIÓN DEL PRODUCER (usado por DeadLetterPublishingRecoverer vía KafkaTemplate)
     producer:
       bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-
-    # Opciones del listener (concurrency controla hilos paralelos por container)
     listener:
       concurrency: 3
 
-# Configuración del servidor (puerto HTTP y contexto)
+  # ── SECURITY: Resource Server JWT (usar la clave pública del auth-service)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${JWT_JWK_SET_URI:http://localhost:8081/.well-known/jwks.json}
+
+# ── SERVIDOR ────────────────────────────────────────────────────────────────
 server:
   port: ${SERVER_PORT:8084}
 
-# Niveles de logging por paquete
+# ── LOGGING ─────────────────────────────────────────────────────────────────
 logging:
   level:
     root: INFO
     com.finnode.ledger: DEBUG
 
-# Variables específicas del proyecto (puedes añadir más según necesites)
+# ── FINNODE ──────────────────────────────────────────────────────────────────
 finnode:
   env: ${FINNODE_ENV:local}
-

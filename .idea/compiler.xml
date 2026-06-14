@@ -8,7 +8,7 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <processorPath useClasspath="false">
-          <entry name="/var/home/Dainover/.m2/repository/org/projectlombok/lombok/1.18.44/lombok-1.18.44.jar" />
+          <entry name="/var/home/Dainover/.m2/repository/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
         </processorPath>
         <module name="api-gateway" />
         <module name="payment-orchestrator" />

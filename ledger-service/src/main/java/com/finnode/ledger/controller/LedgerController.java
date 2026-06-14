@@ -110,7 +110,7 @@ public class LedgerController {
      * @param jwt       token JWT del usuario autenticado
      * @return historial filtrado con totales del período indicado
      */
-    @GetMapping("/{accountId}/entries")
+    @GetMapping(value = "/{accountId}/entries", params = {"from", "to"})
     public ResponseEntity<LedgerHistoryResponse> getHistoryByDateRange(
             @PathVariable UUID accountId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
