@@ -5,7 +5,7 @@ spring:
 
   # ── BASE DE DATOS ──────────────────────────────────────────────────────────
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5534/ledger_db}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5534}/${DB_NAME:ledger_db}
     username: ${DB_USERNAME:ledger_user}
     password: ${DB_PASSWORD:Dainover}
     driver-class-name: org.postgresql.Driver

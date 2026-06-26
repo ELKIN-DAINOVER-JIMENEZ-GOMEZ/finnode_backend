@@ -7,6 +7,20 @@ spring:
         jwt:
           issuer-uri: ${JWT_ISSUER_URI:http://localhost:8081}
           jwk-set-uri: ${JWT_JWK_SET_URI:http://localhost:9999/mock-jwks}
+  cloud:
+    gateway:
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: ${FRONTEND_URL:http://localhost:4200}
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            allowCredentials: true
 
 services:
   auth-service:
@@ -20,4 +34,3 @@ services:
 
 server:
   port: ${SERVER_PORT:8080}
-

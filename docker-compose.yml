@@ -5,19 +5,20 @@ services:
   # Base de datos PostgreSQL compartida
   # ==========================================================================
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./postgres-init
+      dockerfile: Dockerfile
     container_name: finnode-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_INITDB_ARGS: "-c shared_buffers=256MB -c max_connections=200"
     ports:
-      - "5532:5432"
+      - "5599:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./init-databases.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -28,25 +29,32 @@ services:
   # Apache Kafka - Message Broker de eventos entre servicios
   # ==========================================================================
   kafka:
-    image: bitnami/kafka:3.7
+    image: redpandadata/redpanda:latest
     container_name: finnode-kafka
-    environment:
-      KAFKA_CFG_NODE_ID: 1
-      KAFKA_CFG_PROCESS_ROLES: broker,controller
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 512M
+      - --reserve-memory
+      - 0M
+      - --check=false
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://kafka:9092
     ports:
       - "9092:9092"
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server kafka:9092 || exit 1"]
+      test: [ "CMD-SHELL", "rpk cluster health --brokers kafka:9092 >/dev/null 2>&1" ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     networks:
       - finnode-network
 
@@ -72,12 +80,13 @@ services:
       DB_PASSWORD: Dainover
       KAFKA_BROKER: kafka:9092
       SERVER_PORT: 8081
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     ports:
       - "8081:8081"
     networks:
       - finnode-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/null > /dev/tcp/localhost/8081' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -113,7 +122,7 @@ services:
     networks:
       - finnode-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8082/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/null > /dev/tcp/localhost/8082' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -147,7 +156,7 @@ services:
     networks:
       - finnode-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8084/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/null > /dev/tcp/localhost/8084' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -183,12 +192,14 @@ services:
       ACCOUNT_SERVICE_URL: http://account-service:8082
       SERVER_PORT: 8083
       OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-demo-key}
+      DB_URL: jdbc:postgresql://postgres:5432/payment_db
+      DB_USERNAME: payment_user
     ports:
       - "8083:8083"
     networks:
       - finnode-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8083/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/null > /dev/tcp/localhost/8083' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -224,7 +235,7 @@ services:
     networks:
       - finnode-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/null > /dev/tcp/localhost/8080' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

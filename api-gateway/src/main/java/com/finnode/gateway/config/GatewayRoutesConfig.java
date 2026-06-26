@@ -13,20 +13,14 @@ import org.springframework.context.annotation.Configuration;
  * permitiendo añadir filtros por ruta de forma expresiva (headers personalizados,
  * reescritura de paths, circuit breakers, rate limiting) sin sobrecargar el YAML.
  *
- * <p><strong>¿Por qué en código y no solo en YAML?</strong>
- * La configuración YAML es suficiente para enrutamiento simple. Esta clase
- * existe para escalar: cuando se necesite añadir un filtro específico por ruta
- * (ej: rate limiting solo en {@code /api/payments/**}), el código Java es más
- * legible y testeable que el YAML equivalente.
- *
  * <p><strong>Rutas definidas:</strong>
  * <pre>
- * /api/auth/register    → auth-service      :8081  [sin JWT]
- * /api/auth/login       → auth-service      :8081  [sin JWT]
- * /api/auth/**          → auth-service      :8081  [JWT requerido]
- * /api/accounts/**      → account-service   :8082  [JWT requerido]
- * /api/payments/**      → payment-orchestrator :8083 [JWT requerido]
- * /api/ledger/**        → ledger-service    :8084  [JWT requerido]
+ * /api/auth/register    → auth-service           :8081  [sin JWT]
+ * /api/auth/login       → auth-service           :8081  [sin JWT]
+ * /api/auth/**          → auth-service           :8081  [JWT requerido]
+ * /api/accounts/**      → account-service        :8082  [JWT requerido]
+ * /api/payments/**      → payment-orchestrator   :8083  [JWT requerido]
+ * /api/ledger/**        → ledger-service         :8084  [JWT requerido]
  * </pre>
  *
  * <p>La validación del JWT ocurre en {@link SecurityConfig} antes de que
@@ -53,21 +47,27 @@ public class GatewayRoutesConfig {
         return builder.routes()
                 .route("auth-register", r -> r
                         .path("/api/auth/register")
+                        .filters(f -> f.rewritePath("/api/(?<segment>.*)", "/${segment}"))
                         .uri(authServiceUrl))
                 .route("auth-login", r -> r
                         .path("/api/auth/login")
+                        .filters(f -> f.rewritePath("/api/(?<segment>.*)", "/${segment}"))
                         .uri(authServiceUrl))
                 .route("auth-service", r -> r
                         .path("/api/auth/**")
+                        .filters(f -> f.rewritePath("/api/(?<segment>.*)", "/${segment}"))
                         .uri(authServiceUrl))
                 .route("account-service", r -> r
                         .path("/api/accounts/**")
+                        .filters(f -> f.rewritePath("/api/(?<segment>.*)", "/${segment}"))
                         .uri(accountServiceUrl))
                 .route("payment-orchestrator", r -> r
                         .path("/api/payments/**")
+                        .filters(f -> f.rewritePath("/api/(?<segment>.*)", "/${segment}"))
                         .uri(paymentOrchestratorUrl))
                 .route("ledger-service", r -> r
                         .path("/api/ledger/**")
+                        .filters(f -> f.rewritePath("/api/(?<segment>.*)", "/${segment}"))
                         .uri(ledgerServiceUrl))
                 .build();
     }

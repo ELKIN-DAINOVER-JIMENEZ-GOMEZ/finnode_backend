@@ -1,3 +1,4 @@
+
 package com.finnode.gateway.config;
 
 import org.springframework.context.annotation.Bean;
@@ -6,7 +7,11 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
+import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 
+import java.util.List;
 /**
  * Configuración de seguridad del api-gateway.
  *
@@ -30,6 +35,13 @@ import org.springframework.security.web.server.SecurityWebFilterChain;
  * {@code Authorization}. No se crea ni mantiene ninguna sesión en el gateway.
  */
 
+/**
+ * Configuración de seguridad reactiva del api-gateway.
+ *
+ * Usa ServerHttpSecurity (WebFlux) en lugar de HttpSecurity (MVC/Servlet)
+ * porque el gateway corre sobre Netty reactivo, no Tomcat.
+ */
+
 @Configuration
 @EnableWebFluxSecurity
 public class SecurityConfig {
@@ -38,11 +50,25 @@ public class SecurityConfig {
     public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .cors(Customizer.withDefaults())
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers("/api/auth/register", "/api/auth/login").permitAll()
                         .anyExchange().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
                 .build();
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("http://localhost:4200"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 }

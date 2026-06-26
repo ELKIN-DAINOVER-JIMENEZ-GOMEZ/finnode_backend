@@ -93,13 +93,11 @@ public class AuthService {
 
         // Paso 2: construir y persistir el usuario
         User newUser = User.builder()
-                .id(UUID.randomUUID())
                 .fullName(request.fullName())
                 .email(request.email())
                 .passwordHash(passwordEncoder.encode(request.password()))
                 .role(Role.valueOf("USER"))
                 .active(true)
-                .createdAt(Instant.now())
                 .build();
 
         User savedUser = userRepository.save(newUser);
