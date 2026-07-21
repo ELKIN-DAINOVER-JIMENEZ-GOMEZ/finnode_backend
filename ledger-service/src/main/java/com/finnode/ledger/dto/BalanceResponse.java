@@ -1,6 +1,7 @@
 package com.finnode.ledger.dto;
 
 import lombok.Builder;
+import lombok.Getter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -24,6 +25,7 @@ import java.util.UUID;
  * Esto garantiza que el saldo aquí siempre sea consistente con el
  * historial de asientos — no puede haber desincronía entre ambos.
  */
+
 @Builder
 public record BalanceResponse(
 
