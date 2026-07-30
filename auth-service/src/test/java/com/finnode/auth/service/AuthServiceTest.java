@@ -81,6 +81,10 @@ class AuthServiceTest {
 
 		when(userRepository.existsByEmail(testEmail)).thenReturn(false);
 		when(passwordEncoder.encode(testPassword)).thenReturn(encodedPassword);
+		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
+				.thenReturn(accessToken);
+		when(jwtService.generateRefreshToken(any()))
+				.thenReturn(refreshToken);
 
 		User savedUser = User.builder()
 				.id(testUserId)
@@ -124,7 +128,7 @@ class AuthServiceTest {
 		// Act & Assert
 		assertThatThrownBy(() -> authService.register(request))
 				.isInstanceOf(UserAlreadyExistsException.class)
-				.hasMessageContaining("already registered");
+				.hasMessageContaining("ya esta registrado");
 
 		// Verificar que no se guardó nada
 		verify(userRepository, never()).save(any());
@@ -219,6 +223,11 @@ class AuthServiceTest {
 
 		when(userRepository.findByEmail(testEmail)).thenReturn(Optional.of(user));
 		when(passwordEncoder.matches(testPassword, "hashed_password")).thenReturn(true);
+		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
+				.thenReturn(accessToken);
+		when(jwtService.generateRefreshToken(any()))
+				.thenReturn(refreshToken);
+
 
 		// Act
 		AuthResponse response = authService.login(request);
@@ -239,10 +248,7 @@ class AuthServiceTest {
 		LoginRequest request = new LoginRequest("nonexistent@example.com", testPassword);
 
 		when(userRepository.findByEmail("nonexistent@example.com")).thenReturn(Optional.empty());
-		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
-				.thenReturn(accessToken);
-		when(jwtService.generateRefreshToken(any()))
-				.thenReturn(refreshToken);
+
 
 		// Act & Assert
 		assertThatThrownBy(() -> authService.login(request))
@@ -268,10 +274,7 @@ class AuthServiceTest {
 
 		when(userRepository.findByEmail(testEmail)).thenReturn(Optional.of(user));
 		when(passwordEncoder.matches("wrongPassword", "correct_hashed_password")).thenReturn(false);
-		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
-				.thenReturn(accessToken);
-		when(jwtService.generateRefreshToken(any()))
-				.thenReturn(refreshToken);
+
 
 		// Act & Assert
 		assertThatThrownBy(() -> authService.login(request))
@@ -296,10 +299,7 @@ class AuthServiceTest {
 				.build();
 
 		when(userRepository.findByEmail(testEmail)).thenReturn(Optional.of(inactiveUser));
-		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
-				.thenReturn(accessToken);
-		when(jwtService.generateRefreshToken(any()))
-				.thenReturn(refreshToken);
+
 
 		// Act & Assert
 		assertThatThrownBy(() -> authService.login(request))
@@ -330,6 +330,10 @@ class AuthServiceTest {
 		when(jwtService.isRefreshTokenValid(refreshToken)).thenReturn(true);
 		when(jwtService.extractUserId(refreshToken)).thenReturn(testUserId);
 		when(userRepository.findById(testUserId)).thenReturn(Optional.of(user));
+		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
+				.thenReturn(accessToken);
+		when(jwtService.generateRefreshToken(any()))
+				.thenReturn(refreshToken);
 
 		// Act
 		AuthResponse response = authService.refresh(request);
@@ -354,7 +358,7 @@ class AuthServiceTest {
 		// Act & Assert
 		assertThatThrownBy(() -> authService.refresh(request))
 				.isInstanceOf(InvalidCredentialsException.class)
-				.hasMessageContaining("invalid or expired");
+				.hasMessageContaining("invalido o expirado");
 	}
 
 	@Test
@@ -366,10 +370,7 @@ class AuthServiceTest {
 		when(jwtService.isRefreshTokenValid(refreshToken)).thenReturn(true);
 		when(jwtService.extractUserId(refreshToken)).thenReturn(testUserId);
 		when(userRepository.findById(testUserId)).thenReturn(Optional.empty());
-		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
-				.thenReturn(accessToken);
-		when(jwtService.generateRefreshToken(any()))
-				.thenReturn(refreshToken);
+
 
 		// Act & Assert
 		assertThatThrownBy(() -> authService.refresh(request))
@@ -396,10 +397,7 @@ class AuthServiceTest {
 		when(jwtService.isRefreshTokenValid(refreshToken)).thenReturn(true);
 		when(jwtService.extractUserId(refreshToken)).thenReturn(testUserId);
 		when(userRepository.findById(testUserId)).thenReturn(Optional.of(inactiveUser));
-		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
-				.thenReturn(accessToken);
-		when(jwtService.generateRefreshToken(any()))
-				.thenReturn(refreshToken);
+
 
 		// Act & Assert
 		assertThatThrownBy(() -> authService.refresh(request))
@@ -430,6 +428,10 @@ class AuthServiceTest {
 		when(userRepository.existsByEmail(testEmail)).thenReturn(false);
 		when(passwordEncoder.encode(testPassword)).thenReturn("hashed");
 		when(userRepository.save(any(User.class))).thenReturn(savedUser);
+		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
+				.thenReturn(accessToken);
+		when(jwtService.generateRefreshToken(any()))
+				.thenReturn(refreshToken);
 
 		// Act
 		AuthResponse response = authService.register(request);
@@ -464,6 +466,10 @@ class AuthServiceTest {
 		when(userRepository.existsByEmail(testEmail)).thenReturn(false);
 		when(passwordEncoder.encode(testPassword)).thenReturn("hashed");
 		when(userRepository.save(any(User.class))).thenReturn(savedUser);
+		when(jwtService.generateAccessToken(any(), anyString(), anyString()))
+				.thenReturn(accessToken);
+		when(jwtService.generateRefreshToken(any()))
+				.thenReturn(refreshToken);
 
 		// Act
 		authService.register(request);

@@ -71,6 +71,7 @@ public class JwtService {
 
         return Jwts.builder()
                 .subject(userId.toString())
+                .id(UUID.randomUUID().toString()) // jti claim para identificar el token
                 .claim(CLAIM_USER_ID, userId.toString())
                 .claim(CLAIM_EMAIL, email)
                 .claim(CLAIM_ROLE, role)
@@ -97,6 +98,7 @@ public class JwtService {
 
         return Jwts.builder()
                 .subject(userId.toString())
+                .id(UUID.randomUUID().toString())
                 .claim(CLAIM_USER_ID, userId.toString())
                 .claim(CLAIM_TOKEN_TYPE, TYPE_REFRESH)
                 .issuer(jwtConfig.getIssuer())
