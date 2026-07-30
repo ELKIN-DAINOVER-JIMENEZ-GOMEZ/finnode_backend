@@ -128,7 +128,7 @@ class AuthServiceTest {
 		// Act & Assert
 		assertThatThrownBy(() -> authService.register(request))
 				.isInstanceOf(UserAlreadyExistsException.class)
-				.hasMessageContaining("ya esta registrado");
+				.hasMessageContaining("ya está registrado");
 
 		// Verificar que no se guardó nada
 		verify(userRepository, never()).save(any());
@@ -358,7 +358,7 @@ class AuthServiceTest {
 		// Act & Assert
 		assertThatThrownBy(() -> authService.refresh(request))
 				.isInstanceOf(InvalidCredentialsException.class)
-				.hasMessageContaining("invalido o expirado");
+				.hasMessageContaining("inválido o expirado");
 	}
 
 	@Test
