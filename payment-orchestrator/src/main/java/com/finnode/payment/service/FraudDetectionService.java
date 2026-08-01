@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Servicio de detección de fraude.
@@ -125,7 +126,7 @@ public class FraudDetectionService {
         List<Transaction> recentTransactions = transactionRepository
                 .findByUserIdOrderByCreatedAtDesc(transaction.getUserId())
                 .stream()
-                .filter(t -> !t.getId().equals(transaction.getId())) // Excluir la transacción actual
+                .filter(t -> !Objects.equals(t.getId(), transaction.getId())) // Excluir la transacción actual
                 .limit(10)
                 .toList();
 

@@ -62,6 +62,7 @@ class FraudDetectionServiceTest {
         ReflectionTestUtils.setField(fraudDetectionService, "riskThreshold", 0.75);
 
         transaction = Transaction.builder()
+                .id(UUID.randomUUID())
                 .transactionId(UUID.randomUUID())
                 .userId(UUID.randomUUID())
                 .sourceAccountId(UUID.randomUUID())
@@ -178,6 +179,7 @@ class FraudDetectionServiceTest {
     @DisplayName("Debe incluir el historial reciente del usuario en el prompt enviado al modelo")
     void evaluate_shouldIncludeRecentHistoryInPrompt() {
         Transaction previous = Transaction.builder()
+                .id(UUID.randomUUID())
                 .transactionId(UUID.randomUUID())
                 .userId(transaction.getUserId())
                 .sourceAccountId(transaction.getSourceAccountId())
